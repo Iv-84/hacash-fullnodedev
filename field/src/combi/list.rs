@@ -46,7 +46,7 @@ impl Parse for $class {
         let mut count = <$cty>::default();
         let mut seek = count.parse_from(buf)?;
         let count_usize = *count as usize;
-        let mut new_lists = Vec::with_capacity(count_usize);
+        let mut new_lists = Vec::with_capacity($crate::prealloc_cap(count_usize, buf.len()));
         for _ in 0..count_usize {
             let mut obj = <$vty>::new();
             seek += obj.parse_from(buf)?;

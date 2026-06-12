@@ -192,7 +192,7 @@ macro_rules! define_diamond_name_list {
             fn parse_from(&mut self, buf: &mut &[u8]) -> Ret<usize> {
                 let mut count = <$nty>::default();
                 let mut seek = count.parse_from(buf)?;
-                let mut lists = Vec::with_capacity(*count as usize);
+                let mut lists = Vec::with_capacity($crate::prealloc_cap(*count as usize, buf.len()));
                 for _ in 0..*count as usize {
                     let mut obj = DiamondName::new();
                     seek += obj.parse_from(buf)?;

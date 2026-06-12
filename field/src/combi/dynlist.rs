@@ -42,7 +42,7 @@ impl Parse for $class {
         let mut seek = count.parse_from(buf)?;
         let count_usize = *count as usize;
         let mut cur = *buf;
-        let mut new_vlist = Vec::with_capacity(count_usize);
+        let mut new_vlist = Vec::with_capacity($crate::prealloc_cap(count_usize, cur.len()));
         for _ in 0..count_usize {
             let (obj, mvsk) = $createfn(cur)?;
             cur = &cur[mvsk..];

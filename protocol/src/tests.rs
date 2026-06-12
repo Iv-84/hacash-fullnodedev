@@ -2400,3 +2400,32 @@ fn test_address_bare_base58check_in_protocol() {
     ptr.from_json(&format!(r#""{}""#, addr_str)).unwrap();
     assert_eq!(ptr.to_readable(), addr_str);
 }
+
+#[test]
+fn test_block_parse_rejects_oversized_transaction_count_without_oom() {
+    // Regression test for transactions preallocation DoS
+    let _guard = install_test_registry();
+
+    // Build a block whose body holds exactly one parseable transaction.
+    let mut block = BlockV1::default();
+    block.intro.head.height = BlockHeight::from(1);
+    let mut tx = TransactionType2::default();
+    tx.ty = Uint1::from(TransactionType2::TYPE);
+    tx.timestamp = Timestamp::from(1730000001);
+    tx.fee = Amount::mei(1);
+    let mut act = HacToTrs::new();
+    act.to = AddrOrPtr::from_addr(field::ADDRESS_ONEX.clone());
+    act.hacash = Amount::small(1, 244);
+    tx.actions.push(Box::new(act)).unwrap();
+    block.transactions.push(Box::new(tx)).unwrap();
+
+    // Lie about the count: claim u32::MAX transactions while the body has one.
+    block.intro.head.transaction_count = Uint4::from(u32::MAX);
+
+    let bytes = block.serialize();
+    let res = block_create(&bytes);
+    assert!(
+        res.is_err(),
+        "block with an oversized transaction_count must be rejected by the parser"
+    );
+}
