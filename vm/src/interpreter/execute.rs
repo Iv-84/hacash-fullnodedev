@@ -30,7 +30,7 @@ fn finish_ntcall(
 macro_rules! itrparam {
     ($codes: expr, $pc: expr, $l: expr, $t: ty) => {{
         let r = $pc + $l;
-        #[cfg(debug_assertions)]
+        //#[cfg(debug_assertions)]
         if r < $pc || r > $codes.len() {
             return itr_err_code!(CodeOverflow);
         }
@@ -55,7 +55,7 @@ macro_rules! itrparamu16 {
 macro_rules! peekparam {
     ($codes: expr, $pc: expr, $l: expr, $t: ty) => {{
         let _r = $pc + $l;
-        #[cfg(debug_assertions)]
+        // #[cfg(debug_assertions)]
         if _r < $pc || _r > $codes.len() {
             return itr_err_code!(CodeOverflow);
         }
@@ -333,10 +333,10 @@ pub fn execute_code_in_frame<H: VmHost + ?Sized>(
     // start run
     loop {
         // read inst
-        debug_assert!(*pc < codes.len());
-        // if *pc >= codes.len() {
-        //     return itr_err_code!(CodeOverflow)
-        // }
+        // #[cfg(debug_assertions)]  // uncomment for debug-only check
+        if *pc >= codes.len() {
+            return itr_err_code!(CodeOverflow)
+        }
         let instbyte = unsafe { *codes.get_unchecked(*pc as usize) }; // u8
         let instruction: Bytecode = std_mem_transmute!(instbyte);
         *pc += 1; // next

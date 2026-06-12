@@ -11,6 +11,9 @@ action_define! { DiaSingleTrs, 5,
     (self, ctx, _gas {
         let from  = ctx.env().tx.main;
         let to    = ctx.addr(&self.to)?;
+        if to.is_privakey_unknown() {
+            return xerrf!("cannot transfer diamond to system address {} (privakey unknown)", to)
+        }
         let dlist = DiamondNameListMax200::one(self.diamond);
         do_diamonds_transfer(&dlist, &from, &to, ctx)
     })
@@ -33,6 +36,9 @@ action_define! { DiaFromToTrs, 6,
     (self, ctx, _gas {
         let from = ctx.addr(&self.from)?;
         let to   = ctx.addr(&self.to)?;
+        if to.is_privakey_unknown() {
+            return xerrf!("cannot transfer diamond to system address {} (privakey unknown)", to)
+        }
         do_diamonds_transfer(&self.diamonds, &from, &to, ctx)
     })
 }
@@ -50,6 +56,9 @@ action_define! { DiaToTrs, 7,
     (self, ctx, _gas {
         let from = ctx.env().tx.main;
         let to   = ctx.addr(&self.to)?;
+        if to.is_privakey_unknown() {
+            return xerrf!("cannot transfer diamond to system address {} (privakey unknown)", to)
+        }
         do_diamonds_transfer(&self.diamonds, &from, &to, ctx)
     })
 }

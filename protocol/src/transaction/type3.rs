@@ -208,6 +208,8 @@ fn do_tx_execute_type3(tx: &TransactionType3, ctx: &mut dyn Context) -> Rerr {
         ctx.gas_refund()?;
     }
     operate::hac_sub(ctx, &prep.main, &prep.fee)?;
+    // Safety: clear leaked HAC/SAT/Asset on SETTLEMENT_ADDR after all balance operations.
+    crate::tex::settlement_addr_postsettle_cleanup(ctx);
     Ok(())
 }
 

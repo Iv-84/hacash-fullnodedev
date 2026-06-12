@@ -26,12 +26,23 @@ macro_rules! satoshi_operate_define {
 
 /**************************** */
 
-satoshi_operate_define!(sat_add, addr, sat, oldsat, {
+pub fn sat_add(ctx: &mut dyn Context, addr: &Address, sat: &Satoshi) -> XRet<Satoshi> {
+    addr.check_version()?;
+    if sat.uint() == 0 {
+        return xerrf!("satoshi value cannot be zero")
+    }
+    let mut state = CoreState::wrap(ctx.state());
+    let mut userbls = state.balance(addr).unwrap_or_default();
+    let oldsat = &userbls.satoshi.to_satoshi();
     let Some(sum) = oldsat.uint().checked_add(sat.uint()) else {
         return xerrf!("address {} satoshi add overflow: {} + {}", addr, oldsat, sat)
     };
-    Satoshi::from(sum)
-});
+    let newsat = Satoshi::from(sum);
+    userbls.satoshi = SatoshiAuto::from_satoshi(&newsat);
+    state.balance_set(addr, &userbls);
+    blackhole_engulf(&mut state, addr);
+    Ok(newsat)
+}
 
 satoshi_operate_define!(sat_sub, addr, sat, oldsat, {  
     // check
@@ -61,9 +72,7 @@ pub fn sat_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, sat: &S
     }
     // do transfer
     sat_sub(ctx, from, sat)?;
-    sat_add(ctx, to,   sat)?;
-    let state = &mut CoreState::wrap(ctx.state());
-    blackhole_engulf(state, to);
+    sat_add(ctx, to,   sat)?; // sat_add includes blackhole_engulf
     // ok
     Ok(vec![])
 }

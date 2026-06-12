@@ -660,7 +660,8 @@ fn test_ctx_action_call_must_check_req_sign() {
     use crate::transaction::TransactionType2;
 
     // tx without any signatures
-    let tx = TransactionType2::new_by(field::ADDRESS_ONEX.clone(), Amount::mei(1), 1730000000);
+    let alice = Address::create_privakey([3u8; 20]);
+    let tx = TransactionType2::new_by(alice.clone(), Amount::mei(1), 1730000000);
 
     let mut env = Env::default();
     env.tx = crate::transaction::create_tx_info(&tx);
@@ -675,7 +676,7 @@ fn test_ctx_action_call_must_check_req_sign() {
     // HacFromTrs requires signature of `from`, but since this action is executed via ctx.action_call,
     // it would bypass tx.req_sign unless ctx_action_call enforces it.
     let mut act = HacFromTrs::new();
-    act.from = AddrOrPtr::from_addr(field::ADDRESS_ONEX.clone());
+    act.from = AddrOrPtr::from_addr(alice.clone());
     act.hacash = Amount::mei(1);
     let bytes = act.serialize();
 
@@ -693,9 +694,11 @@ fn test_tx_execute_must_verify_signature_before_actions() {
     use crate::state::EmptyLogs;
     use crate::transaction::TransactionType2;
 
-    let mut tx = TransactionType2::new_by(field::ADDRESS_ONEX.clone(), Amount::mei(1), 1730000000);
+    let alice = Address::create_privakey([3u8; 20]);
+    let bob = Address::create_privakey([4u8; 20]);
+    let mut tx = TransactionType2::new_by(alice.clone(), Amount::mei(1), 1730000000);
     let mut act = HacToTrs::new();
-    act.to = AddrOrPtr::from_addr(field::ADDRESS_TWOX.clone());
+    act.to = AddrOrPtr::from_addr(bob);
     act.hacash = Amount::mei(1);
     tx.actions.push(Box::new(act)).unwrap();
 

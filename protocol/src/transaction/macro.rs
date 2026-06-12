@@ -245,6 +245,12 @@ fn prepare_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Ret<TxExec
         if !main.is_privakey() {
             return errf!("tx fee address version must be PRIVAKEY type.");
         }
+        if main.is_privakey_unknown() {
+            return errf!(
+                "tx main address {} is a system address with unknown private key",
+                main
+            );
+        }
         for adr in tx.addrs() {
             adr.check_version()?;
         }
@@ -333,6 +339,8 @@ fn do_tx_execute_legacy<T: Transaction + LegacyTransactionRead>(
     }
     super::tex::do_settlement(ctx)?;
     operate::hac_sub(ctx, &prep.main, &prep.fee)?;
+    // Safety: clear leaked HAC/SAT/Asset on SETTLEMENT_ADDR after all balance operations.
+    crate::tex::settlement_addr_postsettle_cleanup(ctx);
     let fee_got = tx.fee_got();
     record_legacy_extra9_burn_fee(ctx, &prep.fee, &fee_got)?;
     Ok(())

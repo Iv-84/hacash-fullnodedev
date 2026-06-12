@@ -25,12 +25,21 @@ pub fn $func_name(state: &mut CoreState, $addr: &Address, $hacd: &DiamondNumber)
 
 /**************************** */
 
-diamond_operate_define!(hacd_add, addr, hacd, oldhacd, {
+pub fn hacd_add(state: &mut CoreState, addr: &Address, hacd: &DiamondNumber) -> XRet<DiamondNumber> {
+    addr.check_version()?;
+    let mut userbls = state.balance(addr).unwrap_or_default();
+    let oldhacd_val = userbls.diamond.to_diamond()
+        .map_err(|e| format!("address {} diamond count decode failed: {}", addr, e))?;
+    let oldhacd = &oldhacd_val;
     let Some(sum) = oldhacd.uint().checked_add(hacd.uint()) else {
         return xerrf!("address {} diamond add overflow: {} + {}", addr, oldhacd, hacd)
     };
-    DiamondNumber::from_usize(sum as usize)?
-});
+    let newhacd = DiamondNumber::from_usize(sum as usize)?;
+    userbls.diamond = DiamondNumberAuto::from_diamond(&newhacd);
+    state.balance_set(addr, &userbls);
+    blackhole_engulf(state, addr);
+    Ok(newhacd)
+}
 
 diamond_operate_define!(hacd_sub, addr, hacd, oldhacd, {  
     // check
@@ -55,8 +64,7 @@ pub fn hacd_transfer(state: &mut CoreState,
     }
     // do transfer
     hacd_sub(state, from, hacd)?;
-    hacd_add(state, to,   hacd)?;
-    blackhole_engulf(state, to);
+    hacd_add(state, to,   hacd)?; // hacd_add includes blackhole_engulf
     // ok
     Ok(vec![])
 }

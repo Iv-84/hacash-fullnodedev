@@ -142,6 +142,12 @@ impl<'a> ContextInst<'a> {
         if let Some(isok) = self.check_sign_cache.get(adr) {
             return isok.clone().map(|_| ());
         }
+        if adr.is_privakey_unknown() {
+            return errf!(
+                "address {} is a system address (value < u32::MAX) with unknown private key",
+                adr
+            );
+        }
         adr.must_privakey()?;
         let isok = verify_target_signature(adr, self.txr);
         self.check_sign_cache.insert(*adr, isok.clone());
