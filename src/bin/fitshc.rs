@@ -2,7 +2,7 @@ use field::*;
 use std::env;
 use std::fs;
 use std::path::Path;
-use vm::action::{CONTRACT_STORE_LOWEST_FEE_PURITY, CONTRACT_STORE_PERM_PERIODS, ContractDeploy};
+use vm::action::ContractDeploy;
 use vm::fitshc::compiler::compile;
 // use sys::*;
 use basis::interface::*;
@@ -22,7 +22,7 @@ fn estimate_protocol_cost_auto(
         argv,
         sto,
         sto.size() as u128,
-        CONTRACT_STORE_PERM_PERIODS,
+        protocol::params::CONTRACT_STORE_PERM_PERIODS,
     )
 }
 
@@ -56,10 +56,8 @@ fn estimate_protocol_cost_auto_with_periods(
         tx.gas_max = Uint1::from(8);
         tx.fill_sign(&acc).unwrap();
 
-        let mut fee_purity = tx.fee_purity() as u128;
-        if fee_purity < CONTRACT_STORE_LOWEST_FEE_PURITY as u128 {
-            fee_purity = CONTRACT_STORE_LOWEST_FEE_PURITY as u128;
-        }
+        let fee_purity =
+            protocol::params::vm_effective_fee_purity(0, tx.fee_purity()) as u128;
         let mut need = fee_purity
             .saturating_mul(charge_bytes)
             .saturating_mul(periods as u128);

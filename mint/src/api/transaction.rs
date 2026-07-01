@@ -160,10 +160,42 @@ fn transaction_build_inner(req: &ApiRequest) -> ApiResponse {
         );
     };
 
-    let mut tx = TransactionType2::new_by(main_addr, fee, curtimes());
-    if let Some(ts) = jsonv["timestamp"].as_u64() {
-        tx.timestamp = Timestamp::from(ts);
-    }
+    let tx_type = jsonv
+        .get("tx_type")
+        .or_else(|| jsonv.get("type"))
+        .and_then(Value::as_u64)
+        .unwrap_or(TransactionType2::TYPE as u64);
+    let timestamp = jsonv["timestamp"].as_u64().unwrap_or_else(curtimes);
+    let mut tx: Box<dyn Transaction> = match tx_type {
+        v if v == TransactionType2::TYPE as u64 => {
+            Box::new(TransactionType2::new_by(main_addr, fee, timestamp))
+        }
+        v if v == TransactionType3::TYPE as u64 => {
+            let gas_max = jsonv["gas_max"].as_u64().unwrap_or(0);
+            if gas_max > protocol::context::TX_GAS_BUDGET_CAP_BYTE as u64 {
+                return create_transaction_error_response(
+                    "create_transaction_invalid_gas_max",
+                    "gas_max exceeds the current Type3 cap",
+                    "parse_gas_max",
+                    vec![
+                        ("field", json!("gas_max")),
+                        ("max", json!(protocol::context::TX_GAS_BUDGET_CAP_BYTE)),
+                    ],
+                );
+            }
+            let mut tx = TransactionType3::new_by(main_addr, fee, timestamp);
+            tx.gas_max = Uint1::from(gas_max as u8);
+            Box::new(tx)
+        }
+        _ => {
+            return create_transaction_error_response(
+                "create_transaction_invalid_type",
+                "transaction type must be 2 or 3",
+                "parse_type",
+                vec![("field", json!("tx_type"))],
+            );
+        }
+    };
 
     let Some(acts) = jsonv["actions"].as_array() else {
         return create_transaction_error_response(
@@ -246,6 +278,7 @@ fn transaction_build_inner(req: &ApiRequest) -> ApiResponse {
 #[cfg(test)]
 mod transaction_build_tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn install_protocol_setup() -> protocol::setup::TestSetupScopeGuard {
         let setup = protocol::setup::new_standard_protocol_setup(x16rs::block_hash);
@@ -297,6 +330,62 @@ mod transaction_build_tests {
                 .as_str()
                 .unwrap_or_default()
                 .contains("missing required field(s): from")
+        );
+    }
+
+    #[test]
+    fn transaction_build_supports_type3_gas_max() {
+        let _guard = install_protocol_setup();
+        let req = ApiRequest {
+            query: HashMap::from([("body".to_owned(), "true".to_owned())]),
+            body: json!({
+                "tx_type": 3,
+                "main_address": "1AVRuFXNFi3rdMrPH4hdqSgFrEBnWisWaS",
+                "fee": "1:244",
+                "gas_max": 17,
+                "actions": []
+            })
+            .to_string()
+            .into_bytes(),
+            ..ApiRequest::default()
+        };
+
+        let res = transaction_build_inner(&req);
+        let body: Value = serde_json::from_slice(&res.body).unwrap();
+
+        assert_eq!(body["ret"].as_u64(), Some(0));
+        assert_eq!(body["type"].as_u64(), Some(3));
+        assert_eq!(body["gas_max"].as_u64(), Some(17));
+        let txhex = body["body"].as_str().unwrap();
+        let txdts = hex::decode(txhex).unwrap();
+        let (tx, _) = protocol::transaction::transaction_create(&txdts).unwrap();
+        assert_eq!(tx.ty(), TransactionType3::TYPE);
+        assert_eq!(tx.gas_max_byte(), Some(17));
+    }
+
+    #[test]
+    fn transaction_build_rejects_type3_gas_max_above_cap() {
+        let _guard = install_protocol_setup();
+        let req = ApiRequest {
+            body: json!({
+                "tx_type": 3,
+                "main_address": "1AVRuFXNFi3rdMrPH4hdqSgFrEBnWisWaS",
+                "fee": "1:244",
+                "gas_max": protocol::context::TX_GAS_BUDGET_CAP_BYTE as u64 + 1,
+                "actions": []
+            })
+            .to_string()
+            .into_bytes(),
+            ..ApiRequest::default()
+        };
+
+        let res = transaction_build_inner(&req);
+        let body: Value = serde_json::from_slice(&res.body).unwrap();
+
+        assert_eq!(body["ret"].as_u64(), Some(1));
+        assert_eq!(
+            body["code"].as_str(),
+            Some("create_transaction_invalid_gas_max")
         );
     }
 }
@@ -433,6 +522,9 @@ fn render_tx_info(
     data.insert("timestamp".to_owned(), json!(tx.timestamp().uint()));
     data.insert("fee".to_owned(), json!(fee_str));
     data.insert("fee_got".to_owned(), json!(tx.fee_got().to_unit_string(unit)));
+    if let Some(gas_max) = tx.gas_max_byte() {
+        data.insert("gas_max".to_owned(), json!(gas_max));
+    }
     data.insert("main_address".to_owned(), json!(main_addr.clone()));
     data.insert("action".to_owned(), json!(tx.action_count()));
 

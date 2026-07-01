@@ -110,15 +110,28 @@ impl IRNode for IRNodeLeaf {
         self.inst as u8
     }
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
-        buf.push(self.bytecode());
-        match self.inst {
-            // Keep loop-control placeholder width at 3 bytes in generated body code. This guarantees that later rewrite to `JMPSL + i16` does not change size.
-            Bytecode::IRBREAK | Bytecode::IRCONTINUE => buf.extend_from_slice(&[0, 0]),
-            _ => {}
+        // IRBREAK / IRCONTINUE are NEVER emitted directly. The surrounding
+        // IRWHILE installs a `LoopPatch` sink (see compile.rs) that
+        // intercepts these two opcodes through `codegen_into_with_patch` and
+        // turns them into real JMPSL instructions at loop close. If we get
+        // here for IRBREAK/IRCONTINUE it means the parser/builder allowed
+        // them outside a while body; fail loudly instead of poisoning the
+        // bytecode stream with an unmapped IR opcode.
+        if matches!(self.inst, Bytecode::IRBREAK | Bytecode::IRCONTINUE) {
+            return itr_err_fmt!(
+                CompileError,
+                "{:?} appeared outside a while-loop body",
+                self.inst
+            );
         }
+        buf.push(self.bytecode());
         Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
+        // Serialized IR keeps IRBREAK/IRCONTINUE as 1-byte leaf nodes. They
+        // are lowered to JMPSL during while-loop codegen, never appear in
+        // the runtime bytecode stream, and round-trip cleanly through
+        // serialize → parse → serialize.
         vec![self.inst as u8]
     }
     fn print(&self) -> String {
@@ -1024,6 +1037,12 @@ impl IRNode for IRNodeBytecodes {
         IRBYTECODE as u8
     }
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
+        // Codegen stays a pure splice — the runtime-safe verifier
+        // (`verify_ir_runtime_safe_bytecodes`) is the gate for the final
+        // composed stream. Constructing an `IRNodeBytecodes` through the
+        // checked `IRNodeBytecodes::new` already runs the fragment check;
+        // leaving codegen unchecked preserves test surfaces that expect
+        // "plain IR conversion still works, runtime conversion rejects".
         Ok(self.codes.clone())
     }
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
@@ -1031,8 +1050,14 @@ impl IRNode for IRNodeBytecodes {
         Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
+        // Length must be enforced at every construction path (parse-side,
+        // `IRNodeBytecodes::new`, syntax-level `bytecode { }`). Panicking
+        // here is deliberate: a truncated serialize would silently drop
+        // trailing instructions and change program semantics, which is
+        // unacceptable in a blockchain context. Every caller should have
+        // caught the overflow before calling serialize.
         if self.codes.len() > u16::MAX as usize {
-            panic!("IRNodeBytecodes payload too long");
+            panic!("IRNodeBytecodes payload too long ({} bytes)", self.codes.len());
         }
         iter::once(IRBYTECODE as u8)
             .chain((self.codes.len() as u16).to_be_bytes())
@@ -1045,6 +1070,22 @@ impl IRNode for IRNodeBytecodes {
             Err(_) => format!("0x{}", hex::encode(&self.codes)),
         };
         format!("bytecode {{ {} }}", codes)
+    }
+}
+
+impl IRNodeBytecodes {
+    /// Build a new `IRNodeBytecodes` from a verified runtime-shaped payload.
+    /// Rejects payloads that exceed the IR length window or contain IR-only
+    /// opcodes / absolute jumps / misaligned params at construction time. This
+    /// is the recommended constructor for any in-process IR builder; the
+    /// `Default` + direct field write path stays for parser/decoder use, where
+    /// the surrounding parse pipeline already enforces the same invariants.
+    pub fn new(codes: Vec<u8>) -> VmrtRes<Self> {
+        if codes.len() > u16::MAX as usize {
+            return itr_err_fmt!(CompileError, "IRNodeBytecodes payload too long");
+        }
+        verify_ir_bytecode_stream_fragment(&codes)?;
+        Ok(Self { codes })
     }
 }
 
@@ -1083,8 +1124,17 @@ impl IRNode for IRNodeArray {
         self.subs.len()
     }
     fn hasretval(&self) -> bool {
+        // I-4: IRBLOCK, IRBLOCKR, and IRLIST differ in their return-value
+        // contract:
+        //   * IRBLOCK  — statement container; internally pops every child's
+        //     value and itself never yields a value.
+        //   * IRBLOCKR — block expression; the last child provides the
+        //     overall value.
+        //   * IRLIST   — sequence of standalone sub-expressions; whether it
+        //     yields a value depends solely on the last child's retval.
+        // The asymmetry is by design so that `compile_block_into` can append
+        // POPs uniformly without consulting the container type.
         match self.inst {
-            // Statement blocks compile by popping any produced values; they do not yield a value.
             Bytecode::IRBLOCK => false,
             _ => match self.subs.last() {
                 None => false,
@@ -1112,11 +1162,26 @@ impl IRNode for IRNodeArray {
         }
     }
     fn serialize(&self) -> Vec<u8> {
-        if self.subs.len() > u16::MAX as usize {
-            panic!("IRNode list or block length overflow")
+        // I-5: serialization is NOT a 1:1 mirror of construction. Children
+        // that opt into `is_serialization_elided()` (currently
+        // `IRNodeEmpty`) disappear from the emitted stream entirely, and the
+        // header `count` is recomputed from the surviving children.
+        //
+        // The visible child count must fit u16 — every construction entry
+        // point enforces this (`with_capacity`, `from_vec`), and the
+        // DedefMut push path is bounded by the vendored parse-time length
+        // header. Exceeding u16::MAX here would produce an unreadable or
+        // semantically-truncated prefix; panic loudly because silent
+        // truncation is worse.
+        let count = self
+            .subs
+            .iter()
+            .filter(|a| !a.is_serialization_elided())
+            .count();
+        if count > u16::MAX as usize {
+            panic!("IRNodeArray length overflow: {} children serialize to {} stripped", self.subs.len(), count);
         }
         let mut children_bytes: Vec<u8> = Vec::new();
-        let mut count: usize = 0;
         for a in &self.subs {
             if a.is_serialization_elided() {
                 continue;
@@ -1128,7 +1193,6 @@ impl IRNode for IRNodeArray {
                     a.bytecode()
                 );
             }
-            count += 1;
             children_bytes.append(&mut b);
         }
         let mut bytes = iter::once(self.inst as u8)

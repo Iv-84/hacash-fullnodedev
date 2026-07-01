@@ -196,16 +196,17 @@ impl Parse for FuncArgvTypes {
 }
 
 impl Serialize for FuncArgvTypes {
-    fn serialize(&self) -> Vec<u8> {
+    fn serialize_to(&self, out: &mut Vec<u8>) {
         let z = self.def_size();
-        let nvs = self.typnum.serialize();
+        self.typnum.serialize_to(out);
         // `define` is always sized to `def_size()` by `parse` / `from_types`. Pad on the
         // fly in case a partial-constructed instance reaches `serialize` so we surface a
         // recoverable error instead of panicking.
-        let mut tail = vec![0u8; z];
         let take = self.define.len().min(z);
-        tail[..take].copy_from_slice(&self.define[..take]);
-        vec![nvs, tail].concat()
+        out.extend_from_slice(&self.define[..take]);
+        if z > take {
+            out.extend(std::iter::repeat_n(0u8, z - take));
+        }
     }
     fn size(&self) -> usize {
         1 + self.def_size()

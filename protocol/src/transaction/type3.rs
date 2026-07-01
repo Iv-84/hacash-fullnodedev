@@ -57,7 +57,9 @@ impl TransactionRead for TransactionType3 {
         if txsz == 0 {
             return 0;
         }
-        self.fee.to_238_u64().unwrap_or(0) / txsz
+        let fee238 = self.fee.to_238_u128().unwrap_or(u128::MAX);
+        let purity = fee238 / txsz as u128;
+        purity.min(u64::MAX as u128) as u64
     }
 
     fn action_count(&self) -> usize {
@@ -142,16 +144,22 @@ impl TransactionType3 {
     }
 
     fn hash_ex(&self, adfe: Vec<u8>) -> Hash {
-        let mut stuff = vec![
-            self.ty.serialize(),
-            self.timestamp.serialize(),
-            self.addrlist.serialize(),
-            adfe,
-            self.actions.serialize(),
-        ]
-        .concat();
-        stuff.append(&mut self.gas_max.serialize());
-        stuff.append(&mut self.ano_mark.serialize());
+        let mut stuff = Vec::with_capacity(
+            self.ty.size()
+                + self.timestamp.size()
+                + self.addrlist.size()
+                + adfe.len()
+                + self.actions.size()
+                + self.gas_max.size()
+                + self.ano_mark.size(),
+        );
+        self.ty.serialize_to(&mut stuff);
+        self.timestamp.serialize_to(&mut stuff);
+        self.addrlist.serialize_to(&mut stuff);
+        stuff.extend_from_slice(&adfe);
+        self.actions.serialize_to(&mut stuff);
+        self.gas_max.serialize_to(&mut stuff);
+        self.ano_mark.serialize_to(&mut stuff);
         let hx = sys::calculate_hash(stuff);
         Hash::must(&hx[..])
     }
@@ -192,6 +200,10 @@ fn do_tx_execute_type3(tx: &TransactionType3, ctx: &mut dyn Context) -> Rerr {
         return errf!("tx type {} ano_mark must be zero", prep.txty);
     }
     mark_tx_exist(ctx, &prep.hx, prep.blkhei);
+    {
+        let mut state = CoreState::wrap(ctx.state());
+        crate::operate::total_add_tx_fee_pay(&mut state, tx)?;
+    }
     let gas_initialized = tx_gas_initialize(ctx)?;
     for action in tx.actions() {
         ctx.exec_from_set(ExecFrom::Top);
@@ -208,10 +220,10 @@ fn do_tx_execute_type3(tx: &TransactionType3, ctx: &mut dyn Context) -> Rerr {
         ctx.gas_refund()?;
     }
     operate::hac_sub(ctx, &prep.main, &prep.fee)?;
+    // Safety: clear leaked HAC/SAT/Asset on SETTLEMENT_ADDR after all balance operations.
+    crate::tex::settlement_addr_postsettle_cleanup(ctx);
     Ok(())
 }
-
-
 
 // init gas
 pub fn tx_gas_initialize(ctx: &mut dyn Context) -> Ret<bool> {

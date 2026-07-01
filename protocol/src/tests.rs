@@ -603,7 +603,8 @@ fn test_block_execute_must_credit_reward_and_fees_to_default_prelude() {
 
     let miner_acc = Account::create_by("protocol-default-prelude-main").unwrap();
     let miner = Address::from(*miner_acc.address());
-    let payee = field::ADDRESS_TWOX.clone();
+    let payee_acc = Account::create_by("protocol-default-prelude-payee").unwrap();
+    let payee = Address::from(*payee_acc.address());
 
     let mut block = BlockV1::default();
     block.intro.head.height = BlockHeight::from(1);
@@ -660,7 +661,8 @@ fn test_ctx_action_call_must_check_req_sign() {
     use crate::transaction::TransactionType2;
 
     // tx without any signatures
-    let tx = TransactionType2::new_by(field::ADDRESS_ONEX.clone(), Amount::mei(1), 1730000000);
+    let alice = Address::create_privakey([3u8; 20]);
+    let tx = TransactionType2::new_by(alice.clone(), Amount::mei(1), 1730000000);
 
     let mut env = Env::default();
     env.tx = crate::transaction::create_tx_info(&tx);
@@ -675,7 +677,7 @@ fn test_ctx_action_call_must_check_req_sign() {
     // HacFromTrs requires signature of `from`, but since this action is executed via ctx.action_call,
     // it would bypass tx.req_sign unless ctx_action_call enforces it.
     let mut act = HacFromTrs::new();
-    act.from = AddrOrPtr::from_addr(field::ADDRESS_ONEX.clone());
+    act.from = AddrOrPtr::from_addr(alice.clone());
     act.hacash = Amount::mei(1);
     let bytes = act.serialize();
 
@@ -693,9 +695,11 @@ fn test_tx_execute_must_verify_signature_before_actions() {
     use crate::state::EmptyLogs;
     use crate::transaction::TransactionType2;
 
-    let mut tx = TransactionType2::new_by(field::ADDRESS_ONEX.clone(), Amount::mei(1), 1730000000);
+    let alice = Address::create_privakey([3u8; 20]);
+    let bob = Address::create_privakey([4u8; 20]);
+    let mut tx = TransactionType2::new_by(alice.clone(), Amount::mei(1), 1730000000);
     let mut act = HacToTrs::new();
-    act.to = AddrOrPtr::from_addr(field::ADDRESS_TWOX.clone());
+    act.to = AddrOrPtr::from_addr(bob);
     act.hacash = Amount::mei(1);
     tx.actions.push(Box::new(act)).unwrap();
 
@@ -1102,6 +1106,18 @@ fn test_type3_fee_got_does_not_burn_from_action_mark() {
     assert!(tx.fee_purity() > 0);
 }
 
+#[test]
+fn test_fee_purity_saturates_instead_of_zero_on_large_fee() {
+    let _guard = install_test_registry();
+
+    let fee = Amount::coin_u128(u64::MAX as u128 + 1, UNIT_238);
+    let tx3 = TransactionType3::new_by(field::ADDRESS_ONEX.clone(), fee.clone(), 1730000000);
+    assert!(tx3.fee_purity() > 0);
+
+    let tx2 = TransactionType2::new_by(field::ADDRESS_ONEX.clone(), fee, 1730000000);
+    assert!(tx2.fee_purity() > 0);
+}
+
 fn run_type3_top_level_gas_case(burn: bool) -> i64 {
     let mut tx = TransactionType3::new_by(
         field::ADDRESS_ONEX.clone(),
@@ -1202,6 +1218,51 @@ fn test_type3_gas_max_zero_allows_plain_zero_surcharge_action() {
 
     tx.execute(&mut ctx).unwrap();
     assert_eq!(ctx.gas_remaining(), 0);
+}
+
+#[test]
+fn test_transfer_rejects_system_recipient_but_allows_blackhole() {
+    let _guard = install_test_registry();
+
+    let main_acc = Account::create_by("protocol-system-recipient-main").unwrap();
+    let main = Address::from(*main_acc.address());
+    let mut tx = TransactionType2::new_by(main.clone(), Amount::mei(1), 1730000000);
+    let mut act = HacToTrs::new();
+    act.to = AddrOrPtr::from_addr(field::ADDRESS_ONEX.clone());
+    act.hacash = Amount::zhu(1);
+    tx.actions.push(Box::new(act)).unwrap();
+    tx.fill_sign(&main_acc).unwrap();
+
+    let mut env = Env::default();
+    env.chain.fast_sync = true;
+    env.tx = crate::transaction::create_tx_info(&tx);
+    let mut ctx = ContextInst::new(
+        env,
+        Box::new(AstForkableState::default()),
+        Box::new(EmptyLogs {}),
+        &tx,
+    );
+    {
+        let mut state = crate::state::CoreState::wrap(ctx.state());
+        let mut bls = state.balance(&main).unwrap_or_default();
+        bls.hacash = Amount::mei(10);
+        state.balance_set(&main, &bls);
+    }
+
+    let err = tx.execute(&mut ctx).unwrap_err();
+    assert!(
+        err.contains("cannot transfer to system address"),
+        "{}",
+        err
+    );
+
+    let mut tx_ok = TransactionType2::new_by(main, Amount::mei(1), 1730000000);
+    let mut act_ok = HacToTrs::new();
+    act_ok.to = AddrOrPtr::from_addr(field::ADDRESS_ZERO.clone());
+    act_ok.hacash = Amount::zhu(1);
+    tx_ok.actions.push(Box::new(act_ok)).unwrap();
+    tx_ok.fill_sign(&main_acc).unwrap();
+    tx_ok.execute(&mut ctx).unwrap();
 }
 
 fn seed_tex_asset_state(ctx: &mut dyn Context, owner: Address, serial: Fold64, amount: u64) {
@@ -1464,6 +1525,42 @@ fn test_gas_refund_enters_settled_state_and_keeps_queries() {
     assert_eq!(ctx.gas_max_charge().unwrap(), max_before);
     assert!(ctx.gas_charge(1).unwrap_err().contains("already settled"));
     assert!(ctx.gas_refund().unwrap_err().contains("already settled"));
+}
+
+#[test]
+fn test_type3_gas_price_uses_protocol_vm_floor_when_fee_purity_is_low() {
+    let main = field::ADDRESS_ONEX.clone();
+    let mut tx = TransactionType3::new_by(main, Amount::unit238(1), 1730000000);
+    tx.gas_max = Uint1::from(1);
+    let tx: &'static TransactionType3 = Box::leak(Box::new(tx));
+
+    let mut env = Env::default();
+    env.chain.fast_sync = true;
+    env.tx = crate::transaction::create_tx_info(tx);
+    let mut ctx = ContextInst::new(
+        env,
+        Box::new(AstForkableState::default()),
+        Box::new(EmptyLogs {}),
+        tx,
+    );
+    {
+        let mut state = crate::state::CoreState::wrap(ctx.state());
+        let mut bls = state.balance(&main).unwrap_or_default();
+        bls.hacash = Amount::unit238(5_000_000_000);
+        state.balance_set(&main, &bls);
+    }
+
+    ctx.gas_initialize(100).unwrap();
+    assert_eq!(
+        ctx.gas_max_charge().unwrap(),
+        Amount::unit238(100 * crate::params::VM_LOWEST_FEE_PURITY)
+    );
+
+    ctx.gas_charge(25).unwrap();
+    assert_eq!(
+        ctx.gas_used_charge().unwrap(),
+        Amount::unit238(25 * crate::params::VM_LOWEST_FEE_PURITY)
+    );
 }
 
 #[test]
@@ -1887,8 +1984,7 @@ fn test_action_json_create_must_reject_kind_mismatch() {
 fn test_action_json_create_must_reject_missing_required_field_for_diamond_from_to() {
     let _guard = install_test_registry();
 
-    let json =
-        r#"{"kind":6,"to":"1AVRuFXNFi3rdMrPH4hdqSgFrEBnWisWaS","diamonds":"WWWTTT"}"#;
+    let json = r#"{"kind":6,"to":"1AVRuFXNFi3rdMrPH4hdqSgFrEBnWisWaS","diamonds":"WWWTTT"}"#;
     let err = crate::action::action_json_create(DiaFromToTrs::KIND, json).unwrap_err();
     assert!(err.contains("missing required field"), "{}", err);
     assert!(err.contains("from"), "{}", err);

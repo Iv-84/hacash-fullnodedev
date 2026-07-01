@@ -1,16 +1,5 @@
-/*
-    Permanent storage pricing reference:
-    - 0.0002 HAC / 200 bytes = 0.000001 HAC per byte
-    - 1600 bytes * 10000 periods ~= 8 HAC total permanent protocol cost
-    - 10000 periods ~= 9.51 years when one period = 100 blocks
-*/
-pub const CONTRACT_STORE_PERM_PERIODS: u64 = 10_000;
 
-/*
-    Minimum protocol fee purity floor, in unit-238 per tx byte.
-    10000:238 == 100:244 == 0.000001 HAC per byte.
-*/
-pub const CONTRACT_STORE_LOWEST_FEE_PURITY: i64 = 10000;
+use protocol::operate::*;
 
 macro_rules! vmsto { ($ctx: expr) => {
     VMState::wrap($ctx.state())
@@ -63,8 +52,38 @@ action_define! { ContractDeploy, 40,
             ctx,
             &self.protocol_cost,
             charge_bytes,
-            contract_store_perm_periods(hei),
+            protocol::params::CONTRACT_STORE_PERM_PERIODS,
         )?;
+        if self.protocol_cost.is_positive() {
+            let mut state = CoreState::wrap(ctx.state());
+            with_total_count(&mut state, |ttcount| {
+                total_add_amount_238(
+                    &mut ttcount.contract_protocol_cost_burn_238,
+                    &self.protocol_cost,
+                    "contract_protocol_cost_burn_238",
+                )?;
+                total_add_u8(
+                    &mut ttcount.contract_deploy_count,
+                    1,
+                    "contract_deploy_count",
+                )?;
+                total_add_u12(
+                    &mut ttcount.contract_charge_bytes_total,
+                    charge_bytes as u128,
+                    "contract_charge_bytes_total",
+                )?;
+                Ok(())
+            })?;
+        } else {
+            let mut state = CoreState::wrap(ctx.state());
+            with_total_count(&mut state, |ttcount| {
+                total_add_u8(
+                    &mut ttcount.contract_deploy_count,
+                    1,
+                    "contract_deploy_count",
+                )
+            })?;
+        }
         // save the contract first; tx-level rollback owns final unwind if Construct fails.
         vmsto!(ctx).contract_set_sync_edition(&caddr, &self.contract);
         if has_construct {
@@ -120,7 +139,7 @@ action_define! { ContractUpdate, 41,
         let is_change = did_structural_change || did_effective_lookup_change;
         // Modification tax: charge the edit payload at perm periods (edit.size() >= chain delta).
         let edit_bytes = self.edit.size();
-        let edit_periods = contract_store_perm_periods(hei);
+        let edit_periods = protocol::params::CONTRACT_STORE_PERM_PERIODS;
         let total_fee = calc_contract_protocol_cost_min_with_periods(ctx, edit_bytes, edit_periods)?;
         let pcost = &self.protocol_cost;
         if pcost.is_negative() {
@@ -139,6 +158,27 @@ action_define! { ContractUpdate, 41,
             let maddr = ctx.env().tx.main;
             operate::hac_sub(ctx, &maddr, pcost)?;
         }
+        let mut state = CoreState::wrap(ctx.state());
+        with_total_count(&mut state, |ttcount| {
+            total_add_u8(
+                &mut ttcount.contract_update_count,
+                1,
+                "contract_update_count",
+            )?;
+            total_add_u12(
+                &mut ttcount.contract_charge_bytes_total,
+                edit_bytes as u128,
+                "contract_charge_bytes_total",
+            )?;
+            if pcost.is_positive() {
+                total_add_amount_238(
+                    &mut ttcount.contract_protocol_cost_burn_238,
+                    pcost,
+                    "contract_protocol_cost_burn_238",
+                )?;
+            }
+            Ok(())
+        })?;
         let sys = maybe!(is_change, Change, Append); // Change or Append
         // Authorization is intentionally delegated to the current contract's Change/Append hook.
         // Run the selected hook on the current on-chain contract; failure means the update is not allowed.
@@ -512,18 +552,6 @@ fn check_sub_contract_protocol_cost(
     Ok(())
 }
 
-#[inline(always)]
-fn contract_store_perm_periods(_hei: u64) -> u64 {
-    CONTRACT_STORE_PERM_PERIODS
-}
-
-#[inline(always)]
-fn effective_contract_fee_purity(ctx: &dyn Context) -> u64 {
-    ctx.tx()
-        .fee_purity()
-        .max(CONTRACT_STORE_LOWEST_FEE_PURITY as u64)
-}
-
 fn calc_contract_protocol_cost_min_with_periods(
     ctx: &dyn Context,
     charge_bytes: usize,
@@ -532,7 +560,10 @@ fn calc_contract_protocol_cost_min_with_periods(
     if charge_bytes == 0 {
         return Ok(Amount::zero());
     }
-    let fee_purity = effective_contract_fee_purity(ctx) as u128; // unit-238 per tx byte
+    let fee_purity = protocol::params::vm_effective_fee_purity(
+        ctx.env().block.height,
+        ctx.tx().fee_purity(),
+    ) as u128; // unit-238 per tx byte
     let periods = periods as u128;
     if periods == 0 || fee_purity == 0 {
         return errf!(
@@ -559,7 +590,14 @@ fn calc_contract_protocol_cost_min_with_periods(
     Ok(Amount::coin_u128(need, UNIT_238))
 }
 
-/* ************************************* fn check_sub_contract_protocol_fee(ctx: &mut dyn Context, ctlsz: usize, ptcfee: &Amount) -> Rerr { // let _hei = ctx.env().block.height; let e = errf!("contract protocol fee calculate failed"); let mul = CONTRACT_STORE_FEE_MUL as u128; // 30 let feep = ctx.tx().fee_purity() as u128; // per-byte, no GSCU division let Some(rlfe) = feep.checked_mul(ctlsz as u128) else { return e }; let Some(rlfe) = rlfe.checked_mul(mul) else { return e }; let tx50fee = &Amount::coin_u128(rlfe, UNIT_238).compress(2, AmtCpr::Grow)?; if tx50fee <= ctx.tx().fee() { return e } println!("{}, {}, {}, {}", ctx.tx().size(), ctlsz, ctx.tx().fee(), tx50fee); let maddr = ctx.env().tx.main; // check fee if ptcfee < tx50fee { return errf!("protocol fee must need at least {} but just got {}", tx50fee, ptcfee) } operate::hac_sub(ctx, &maddr, ptcfee)?; Ok(()) } */
+/// Minimum on-chain `protocol_cost` for `charge_bytes` stored `periods` times.
+pub fn contract_protocol_cost_min(
+    ctx: &dyn Context,
+    charge_bytes: usize,
+    periods: u64,
+) -> Ret<Amount> {
+    calc_contract_protocol_cost_min_with_periods(ctx, charge_bytes, periods)
+}
 
 #[cfg(test)]
 mod contract_test {
@@ -633,14 +671,18 @@ mod contract_test {
         }
 
         let mut ctx = make_ctx_with_state(env, Box::new(ext_state), &tx);
-        protocol::operate::hac_add(&mut ctx, &main, &Amount::unit238(10_000_000_000_000))?;
+        hac_add(&mut ctx, &main, &Amount::unit238(10_000_000_000_000))?;
         ctx.gas_initialize(decode_gas_budget(17))?;
 
         let mut act = ContractDeploy::new();
         act.nonce = Uint4::from(nonce);
-        act.protocol_cost = Amount::coin(10000, 244);
         act.construct_argv = BytesW2::from(construct_argv)?;
         act.contract = deploy_contract;
+        act.protocol_cost = contract_protocol_cost_min(
+            &ctx,
+            act.contract.size(),
+            protocol::params::CONTRACT_STORE_PERM_PERIODS,
+        )?;
         let _ = act.execute(&mut ctx)?;
         Ok(())
     }
@@ -679,13 +721,17 @@ mod contract_test {
         }
 
         let mut ctx = make_ctx_with_state(env, Box::new(ext_state), &tx);
-        protocol::operate::hac_add(&mut ctx, &main, &Amount::unit238(10_000_000_000_000))?;
+        hac_add(&mut ctx, &main, &Amount::unit238(10_000_000_000_000))?;
         ctx.gas_initialize(decode_gas_budget(17))?;
 
         let mut act = ContractUpdate::new();
         act.address = target.to_addr();
-        act.protocol_cost = Amount::coin(10000, 244);
         act.edit = edit;
+        act.protocol_cost = contract_protocol_cost_min(
+            &ctx,
+            act.edit.size(),
+            protocol::params::CONTRACT_STORE_PERM_PERIODS,
+        )?;
         let _ = act.execute(&mut ctx)?;
         Ok(())
     }
@@ -979,6 +1025,79 @@ mod contract_test {
                         .unwrap(),
                 )
                 .into_edit(1),
+        );
+    }
+
+    fn make_protocol_cost_ctx(
+        fee_purity: u64,
+    ) -> (
+        &'static testkit::sim::tx::StubTx,
+        &'static mut protocol::context::ContextInst<'static>,
+    ) {
+        init_vm_assigner_once();
+        let main = test_main_addr();
+        let tx = Box::leak(Box::new(
+            StubTxBuilder::new()
+                .ty(TransactionType3::TYPE)
+                .main(main)
+                .addrs(vec![main])
+                .fee(Amount::unit238(1_000_000))
+                .gas_max(17)
+                .tx_size(128)
+                .fee_purity(fee_purity)
+                .build(),
+        ));
+        let mut env = Env::default();
+        env.block.height = 1;
+        env.chain.id = 1;
+        env.chain.fast_sync = true;
+        env.tx.ty = tx.ty();
+        env.tx.main = tx.main();
+        env.tx.addrs = tx.addrs();
+        let ctx = Box::leak(Box::new(make_ctx_with_state(
+            env,
+            Box::new(StateMem::default()),
+            tx,
+        )));
+        (tx, ctx)
+    }
+
+    #[test]
+    fn contract_protocol_cost_min_uses_vm_fee_purity_floor() {
+        let (_tx, ctx) = make_protocol_cost_ctx(1);
+        let min =
+            contract_protocol_cost_min(ctx, 48, protocol::params::CONTRACT_STORE_PERM_PERIODS)
+                .unwrap();
+        let expect = Amount::coin_u128(
+            protocol::params::VM_LOWEST_FEE_PURITY as u128 * 48 * 10_000,
+            field::UNIT_238,
+        );
+        assert_eq!(min, expect);
+        assert!(
+            Amount::coin(10000, 244) < min,
+            "legacy test fixture 1:248 must stay below deploy floor"
+        );
+    }
+
+    #[test]
+    fn contract_protocol_cost_min_scales_with_charge_bytes_and_periods() {
+        let (_tx, ctx) = make_protocol_cost_ctx(80_000);
+        let fee_purity = protocol::params::vm_effective_fee_purity(
+            ctx.env().block.height,
+            ctx.tx().fee_purity(),
+        ) as u128;
+        assert_eq!(fee_purity, 80_000);
+        let min = contract_protocol_cost_min(ctx, 25, 10_000).unwrap();
+        assert_eq!(min, Amount::coin_u128(fee_purity * 25 * 10_000, field::UNIT_238));
+    }
+
+    #[test]
+    fn contract_protocol_cost_min_zero_when_charge_bytes_zero() {
+        let (_tx, ctx) = make_protocol_cost_ctx(1);
+        assert_eq!(
+            contract_protocol_cost_min(ctx, 0, protocol::params::CONTRACT_STORE_PERM_PERIODS)
+                .unwrap(),
+            Amount::zero()
         );
     }
 }

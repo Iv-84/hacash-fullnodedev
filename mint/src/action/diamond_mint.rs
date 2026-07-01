@@ -51,6 +51,7 @@ impl DiamondMint {
 fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> XRet<Vec<u8>> {
     let act = &this.d;
     act.address.must_privakey()?;
+    check_transfer_recipient_allowed(&act.address)?;
     let env = ctx.env().clone();
     check_diamond_mint_tx_type(ctx)?;
     let pending_height = env.block.height;
@@ -72,6 +73,7 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> XRet<Vec<u8>> {
     } else {
         None
     };
+    let tx_bid_burn_add_238 = tx_bid_burn_238.map(|v| v as u128);
     let mut state = CoreState::wrap(ctx.state());
     // check mine
     let (sha3hx, mediumhx, diahx) =
@@ -136,26 +138,24 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> XRet<Vec<u8>> {
             return xerrf!("diamond {} already exists", namestr);
         }
     }
-    // total count
-    let mut ttcount = state.get_total_count();
-    let minted = (*ttcount.minted_diamond as usize)
-        .checked_add(1)
-        .ok_or_else(|| "minted_diamond overflow".to_string())?;
-    ttcount.minted_diamond = DiamondNumber::from_usize(minted)?;
-    if let Some(burn_238) = tx_bid_burn_238 {
-        // Diamond bid burn accounting must follow the actual legacy fee split,
-        // not an independent percentage approximation.
-        let total_burn = (*ttcount.hacd_bid_burn_238)
-            .checked_add(burn_238 as u128)
-            .ok_or_else(|| "hacd_bid_burn_238 overflow".to_string())?;
-        ttcount.hacd_bid_burn_238 = Uint12::from(total_burn);
-    }
+    // Build the post-mint total-count view locally so we can derive
+    // `average_bid_burn` without committing a snapshot that might later
+    // overwrite nested updates such as blackhole HACD burn accounting.
+    let ttcount_next = preview_total_count(&state, |ttcount| {
+        total_add_diamond_number(&mut ttcount.minted_diamond, 1, "minted_diamond")?;
+        if let Some(burn_238) = tx_bid_burn_add_238 {
+            // Diamond bid burn accounting must follow the actual legacy fee split,
+            // not an independent percentage approximation.
+            total_add_u12(&mut ttcount.hacd_bid_burn_238, burn_238, "hacd_bid_burn_238")?;
+        }
+        Ok(())
+    })?;
     // gene
-    let (life_gene, _visual_gene) =
-        calculate_diamond_gene(dianum, &mediumhx, &diahx, &pending_hash, &tx_bid_fee);
+    let life_gene = calculate_diamond_life_gene(dianum, &mediumhx, &pending_hash, &tx_bid_fee);
     // The running average here uses cumulative burned bid fee that already
-    // includes the current diamond update in ttcount.
-    let average_bid_burn = calculate_diamond_average_bid_burn(dianum, *ttcount.hacd_bid_burn_238);
+    // includes the current diamond update in the projected total count.
+    let average_bid_burn =
+        calculate_diamond_average_bid_burn(dianum, *ttcount_next.hacd_bid_burn_238)?;
     // save diamond smelt
     let diasmelt = DiamondSmelt {
         diamond: name.clone(),
@@ -184,17 +184,23 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> XRet<Vec<u8>> {
     if env.chain.diamond_form {
         diamond_owned_push_one(&mut state, &address, &name);
     }
-    // save count
-    state.set_total_count(&ttcount);
     // add balance
     hacd_add(&mut state, &act.address, &DiamondNumber::from(1))?;
+    // save count
+    with_total_count(&mut state, |ttcount| {
+        total_add_diamond_number(&mut ttcount.minted_diamond, 1, "minted_diamond")?;
+        if let Some(burn_238) = tx_bid_burn_add_238 {
+            total_add_u12(&mut ttcount.hacd_bid_burn_238, burn_238, "hacd_bid_burn_238")?;
+        }
+        Ok(())
+    })?;
     // ok
     Ok(vec![])
 }
 
 fn check_diamond_mint_tx_type(ctx: &dyn Context) -> Rerr {
     if ctx.env().tx.ty != protocol::transaction::TransactionType2::TYPE {
-        return errf!("DiamondMint can only be executed in tx type 2")
+        return errf!("DiamondMint can only be executed in tx type 2");
     }
     Ok(())
 }
@@ -213,6 +219,12 @@ mod diamond_mint_tests {
     use protocol::state::EmptyLogs;
     use protocol::transaction::{TransactionType2, TransactionType3};
     use std::sync::Weak;
+
+    fn scoped_protocol_setup() -> protocol::setup::TestSetupScopeGuard {
+        let mut setup = protocol::setup::new_standard_protocol_setup(x16rs::block_hash);
+        crate::setup::register_protocol_extensions(&mut setup);
+        protocol::setup::install_test_scope(setup)
+    }
 
     #[derive(Default, Clone)]
     struct FlatMemState {
@@ -252,10 +264,7 @@ mod diamond_mint_tests {
     }
 
     fn diamond_mint_action(number: u32) -> DiamondMint {
-        let mut act = DiamondMint::with(
-            DiamondName::from(*b"WTYUIA"),
-            DiamondNumber::from(number),
-        );
+        let mut act = DiamondMint::with(DiamondName::from(*b"WTYUIA"), DiamondNumber::from(number));
         act.d.address = Address::create_privakey([7u8; 20]);
         act
     }
@@ -279,12 +288,7 @@ mod diamond_mint_tests {
         let mut tx = TransactionType3::new_by(main, fee, 1);
         tx.push_action(Box::new(act.clone())).unwrap();
         let env = env_for_tx(&tx);
-        let mut ctx = ContextInst::new(
-            env,
-            Box::new(EmptyState {}),
-            Box::new(EmptyLogs {}),
-            &tx,
-        );
+        let mut ctx = ContextInst::new(env, Box::new(EmptyState {}), Box::new(EmptyLogs {}), &tx);
 
         let err = act.execute(&mut ctx).unwrap_err();
         assert!(err.to_string().contains("tx type 2"), "{err}");
@@ -308,5 +312,53 @@ mod diamond_mint_tests {
         let expected = fee.sub_mode_u128(&tx.fee_got()).unwrap();
         let burn = diamond_mint_legacy_bid_burn(&ctx, tx.fee()).unwrap();
         assert_eq!(burn, expected);
+    }
+
+    #[test]
+    fn diamond_mint_blackhole_hacd_count_is_not_overwritten() {
+        let _guard = scoped_protocol_setup();
+        let main = Address::create_privakey([1u8; 20]);
+        let fee = Amount::coin(1000, UNIT_238);
+        let mut act = diamond_mint_action(DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES + 1);
+        act.d.address = BLACKHOLE_ADDR;
+        act.d.nonce = Fixed8::from([1u8; 8]);
+
+        let mut tx = TransactionType2::new_by(main, fee, 1);
+        tx.push_action(Box::new(act.clone())).unwrap();
+        let env = env_for_tx(&tx);
+        let mut ctx = ContextInst::new(
+            env,
+            Box::new(FlatMemState::default()),
+            Box::new(EmptyLogs {}),
+            &tx,
+        );
+
+        act.execute(&mut ctx).unwrap();
+
+        let supply = CoreState::wrap(ctx.state()).get_total_count();
+        assert_eq!(supply.minted_diamond.uint(), 1);
+        assert_eq!(*supply.blackhole_hacd_burn_count, 1);
+    }
+
+    #[test]
+    fn diamond_mint_rejects_non_blackhole_system_recipient() {
+        let _guard = scoped_protocol_setup();
+        let main = Address::create_privakey([1u8; 20]);
+        let fee = Amount::coin(1000, UNIT_238);
+        let mut act = diamond_mint_action(DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES + 1);
+        act.d.address = ADDRESS_ONEX;
+
+        let mut tx = TransactionType2::new_by(main, fee, 1);
+        tx.push_action(Box::new(act.clone())).unwrap();
+        let env = env_for_tx(&tx);
+        let mut ctx = ContextInst::new(
+            env,
+            Box::new(FlatMemState::default()),
+            Box::new(EmptyLogs {}),
+            &tx,
+        );
+
+        let err = act.execute(&mut ctx).unwrap_err();
+        assert!(err.to_string().contains("system address"), "{err}");
     }
 }

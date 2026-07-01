@@ -13,7 +13,13 @@ fn fee_average(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
     data.insert("purity".to_owned(), json!(avgfeep));
 
     if consumption > 0 {
-        let mut base = Amount::unit238(avgfeep * consumption);
+        let Some(fee238) = (avgfeep as u128).checked_mul(consumption as u128) else {
+            return api_error("fee estimate overflow");
+        };
+        if fee238 > u64::MAX as u128 {
+            return api_error("fee estimate overflow");
+        }
+        let mut base = Amount::unit238(fee238 as u64);
         if base.is_zero() {
             base = Amount::zhu(1);
         }

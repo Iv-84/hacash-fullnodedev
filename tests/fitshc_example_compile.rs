@@ -8,6 +8,8 @@ mod fitshc_example_compile {
         // Keep this fixture self-contained so parser/runtime surface changes in docs
         // do not break the fitshc integration smoke test.
         let src = r##"
+pragma fitsh 1.0.0
+
 contract Example {
     function external ping() -> u32 {
         var key = "key"

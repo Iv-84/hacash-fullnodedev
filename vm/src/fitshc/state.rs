@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use super::parse_deploy::DeployInfo;
+use crate::IRNode;
 use crate::Token::*;
 use crate::contract::Contract;
 use crate::rt::SourceMap;
@@ -18,13 +19,40 @@ pub struct ParseState {
     pub libs: Vec<(String, Address)>,
     pub deploy: Option<DeployInfo>,
     pub source_maps: Vec<(String, SourceMap)>,
-    /// Top-level constants: name -> value (parsed as string for simplicity)
-    pub consts: Vec<(String, String)>,
+    /// Top-level constants injected into each compiled body.
+    pub consts: Vec<(String, Box<dyn IRNode>)>,
+    pub warnings: Vec<String>,
+    pub version: Option<FitshVersion>,
     pub userfunc_signs: HashSet<[u8; 4]>,
     pub abst_signs: HashSet<u8>,
     pub library_addrs: HashSet<Address>,
     pub inherit_addrs: HashSet<Address>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FitshVersion {
+    pub major: u16,
+    pub minor: u16,
+    pub patch: u16,
+}
+
+impl FitshVersion {
+    pub const fn new(major: u16, minor: u16, patch: u16) -> Self {
+        Self {
+            major,
+            minor,
+            patch,
+        }
+    }
+}
+
+impl std::fmt::Display for FitshVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+pub const FITSH_CURRENT_VERSION: FitshVersion = FitshVersion::new(1, 0, 0);
 
 impl ParseState {
     pub fn new(tokens: Vec<Token>) -> Self {
@@ -39,6 +67,8 @@ impl ParseState {
             deploy: None,
             source_maps: Vec::new(),
             consts: Vec::new(),
+            warnings: Vec::new(),
+            version: None,
             userfunc_signs: HashSet::new(),
             abst_signs: HashSet::new(),
             library_addrs: HashSet::new(),

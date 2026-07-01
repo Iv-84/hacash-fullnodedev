@@ -74,12 +74,14 @@ Fitsh compiles to IR bytecode. This IR can be **decompiled back to Fitsh source*
 ### 3.1 Top-Level Syntax
 
 ```fitsh
+pragma fitsh 1.0.0
+
 contract ContractName {
 
     deploy {
-        protocol_cost: "1:248",
-        nonce: 1,
-        construct_argv: "0xaabb2244"
+        protocol_cost: amount("1:248"),
+        nonce: 1u32,
+        construct_argv: 0xaabb2244
     }
 
     library [
@@ -111,6 +113,12 @@ contract ContractName {
 | `inherit [ ... ]` | `Name: Address` pairs for inheritance chain |
 | `abstract Name(...) { ... }` | System payment hooks; return 0 = allow, non-zero = reject |
 
+`pragma fitsh x.y.z` is required as the first effective source item. The current compiler version is `1.0.0`:
+
+- `x` is the incompatible major version; mismatched majors are rejected.
+- `y` is the compatible feature version; sources requiring a newer minor version are rejected by older compilers.
+- `z` is the equivalent-change patch version; patch differences compile with a warning because only optimization/formatting-equivalent changes are expected.
+
 ### 3.3 Function Declaration
 
 ```fitsh
@@ -118,12 +126,47 @@ function [external] [ircode|bytecode] name(param1: type1, param2: type2) -> ret_
 ```
 
 - `external`: Marks function as callable by `CALL` (`External`) path
-- `ircode`: Compile to IR (default for contract functions)
+- `ircode`: Compile to IR
 - `bytecode`: Compile to raw bytecode
+- If omitted, the function body is compiled to bytecode.
+- Modifiers have a fixed order: `external` first, then at most one of `ircode` or `bytecode`.
+- `virtual`, `inner`, `view`, `pure`, and `struct` are reserved but unsupported in strict Fitsh 1.0.0 source.
 
 Visibility note:
 - `external` is the runtime visibility marker used by external call resolution.
 - If naming is confusing in practice, a future revision may introduce clearer aliases.
+
+### 3.4 Deploy Config
+
+`deploy { ... }` is a strict deployment configuration block, not a runtime `map`.
+
+```fitsh
+deploy {
+    protocol_cost: amount("1:248"),
+    nonce: 1u32,
+    construct_argv: 0xaabb2244
+}
+```
+
+- `protocol_cost` must use `amount("...")`.
+- `nonce` must fit in `u32`; a `u32` suffix is recommended.
+- `construct_argv` must be a bytes literal (`0x...`, `0b...`, or quoted ASCII bytes).
+- Field names cannot be repeated.
+- A colon after each field name is required.
+
+### 3.5 Constants
+
+Top-level and function-body constants share one literal grammar:
+
+```fitsh
+const NAME [: type] = literal
+const LIMIT: u64 = 100
+const ENABLED: bool = true
+const OWNER: address = emqjNS9PscqdBpMtnC3Jfuc4mvZUPYTPS
+const TAG: bytes = 0xaabb
+```
+
+Constants are compile-time literals only. They may be integer, bool, bytes, char, or address literals; arbitrary expressions are intentionally not accepted.
 
 ---
 

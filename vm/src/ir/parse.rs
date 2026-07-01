@@ -38,7 +38,7 @@ pub fn parse_ir_block(stuff: &[u8], seek: &mut usize) -> VmrtRes<IRNodeArray> {
 
 /* * * parse one node (public interface for serialized IR) */
 pub fn parse_ir_node_one(stuff: &[u8], seek: &mut usize) -> VmrtRes<Box<dyn IRNode>> {
-    parse_ir_node_must(stuff, seek, 0, false)
+    parse_ir_node_must(stuff, seek, 0, false, IrParseContext::Tree, 0)
 }
 
 /* * * parse one node */
@@ -47,7 +47,126 @@ fn parse_ir_node(stuff: &[u8], seek: &mut usize) -> VmrtRes<Option<Box<dyn IRNod
     if codesz == 0 || *seek >= codesz {
         return Ok(None); // finish end
     }
-    Ok(Some(parse_ir_node_must(stuff, seek, 0, false)?))
+    Ok(Some(parse_ir_node_must(
+        stuff,
+        seek,
+        0,
+        false,
+        IrParseContext::Tree,
+        0,
+    )?))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IrParseContext {
+    Tree,
+    StackList,
+    StackValue,
+}
+
+fn is_ir_container_opcode(inst: Bytecode) -> bool {
+    matches!(inst, IRBYTECODE | IRLIST | IRBLOCK | IRBLOCKR)
+}
+
+fn is_stack_list_tail_opcode(inst: Bytecode) -> bool {
+    matches!(inst, PACKLIST | PACKMAP | PACKTUPLE)
+}
+
+// I-2: opcodes that implicitly read the existing top of stack (without
+// declaring it via metadata `input`). `DUP` and `ROLL0` have no params and
+// cannot be represented as a standalone IRNode in tree context — only
+// `ROLL0` is permitted, and only inside an `IrParseContext::StackValue`
+// slot (i.e. as the dedicated stack fixup placed in front of
+// `PUT(slot, ...)` or `UNPACK(idx, ...)`).
+//
+// `ROLL` is intentionally excluded from this list: it carries a `u8` param
+// (`meta.param=1`) and is parsed as `IRNodeParam1`, making it a valid
+// standalone IRNode that encodes its own stack offset.
+fn is_hidden_stack_input_opcode(inst: Bytecode) -> bool {
+    matches!(inst, DUP | ROLL0)
+}
+
+// I-3: only `ROLL0` is allowed inside a `StackValue` slot. This is an
+// intentional shape restriction so that IR round-trips deterministically;
+// `DUP`/`ROLL n` would create ambiguities about which existing stack value
+// the surrounding op is reading.
+fn is_stack_value_opcode_allowed(inst: Bytecode, context: IrParseContext) -> bool {
+    context == IrParseContext::StackValue && inst == ROLL0
+}
+
+// I-1: opcodes with `meta.input == 255` (dynamic stack input) cannot stand
+// alone as IRNodes. They are only legal as:
+//   * `POP` — explicit one-value pop in any tree context;
+//   * IR container opcodes (`IRBYTECODE/IRLIST/IRBLOCK/IRBLOCKR`) — they have
+//     their own structural arity;
+//   * `PACKLIST/PACKMAP/PACKTUPLE` — only at the tail of an `IRLIST`
+//     (`IrParseContext::StackList`), guarded by `validate_irlist_stack_tail`.
+// Anything else (e.g. `DUPN/POPN/JOIN/REV`) must be expressed via a raw
+// `IRBYTECODE` fragment; this keeps the standalone IRNode grammar
+// unambiguous.
+fn is_dynamic_stack_opcode_allowed(inst: Bytecode, context: IrParseContext) -> bool {
+    inst == POP
+        || is_ir_container_opcode(inst)
+        || (context == IrParseContext::StackList && is_stack_list_tail_opcode(inst))
+}
+
+fn irnode_const_usize(node: &dyn IRNode) -> Option<usize> {
+    if let Some(leaf) = node.as_any().downcast_ref::<IRNodeLeaf>() {
+        return match leaf.inst {
+            P0 => Some(0),
+            P1 => Some(1),
+            P2 => Some(2),
+            P3 => Some(3),
+            _ => None,
+        };
+    }
+    if let Some(param1) = node.as_any().downcast_ref::<IRNodeParam1>() {
+        if param1.inst == PU8 {
+            return Some(param1.para as usize);
+        }
+    }
+    if let Some(param2) = node.as_any().downcast_ref::<IRNodeParam2>() {
+        if param2.inst == PU16 {
+            return Some(u16::from_be_bytes(param2.para) as usize);
+        }
+    }
+    None
+}
+
+fn validate_irlist_stack_tail(list: &[Box<dyn IRNode>]) -> VmrtErr {
+    let Some(last) = list.last() else {
+        return Ok(());
+    };
+    let inst: Bytecode = std_mem_transmute!(last.bytecode());
+    if !is_stack_list_tail_opcode(inst) {
+        return Ok(());
+    }
+    if list.len() < 2 {
+        return itr_err_fmt!(InstInvalid, "{:?} requires a preceding item count", inst);
+    }
+    let elem_count = list.len() - 2;
+    let count = irnode_const_usize(&**list.get(elem_count).unwrap()).ok_or_else(|| {
+        ItrErr::new(
+            InstInvalid,
+            &format!("{:?} item count must be a literal", inst),
+        )
+    })?;
+    if count != elem_count {
+        return itr_err_fmt!(
+            InstInvalid,
+            "{:?} item count mismatch: expected {} got {}",
+            inst,
+            elem_count,
+            count
+        );
+    }
+    if count == 0 {
+        return itr_err_fmt!(InstInvalid, "{:?} item count cannot be zero", inst);
+    }
+    if inst == PACKMAP && count % 2 != 0 {
+        return itr_err_fmt!(InstInvalid, "PACKMAP item count must be even");
+    }
+    Ok(())
 }
 
 // must
@@ -56,6 +175,8 @@ fn parse_ir_node_must(
     seek: &mut usize,
     depth: usize,
     isrtv: bool,
+    context: IrParseContext,
+    loop_depth: usize,
 ) -> VmrtRes<Box<dyn IRNode>> {
     if depth > 32 {
         return itr_err_code!(IRNodeOverDepth);
@@ -69,6 +190,16 @@ fn parse_ir_node_must(
     // code
     let insbyte = stuff[*seek]; // u8
     let inst: Bytecode = std_mem_transmute!(insbyte);
+
+    // IRBREAK / IRCONTINUE are only valid inside an IRWHILE body.
+    if matches!(inst, IRBREAK | IRCONTINUE) && loop_depth == 0 {
+        return itr_err_fmt!(
+            InstInvalid,
+            "{:?} is only valid inside a while loop body",
+            inst
+        );
+    }
+
     // parse
     let irnode: Box<dyn IRNode>;
     // mv sk
@@ -111,8 +242,18 @@ fn parse_ir_node_must(
     }
 
     macro_rules! subdph {
+        ($ndp:expr, $rtv:expr, $ctx:expr) => {
+            parse_ir_node_must(stuff, seek, $ndp, $rtv, $ctx, loop_depth)?
+        };
         ($ndp:expr, $rtv:expr) => {
-            parse_ir_node_must(stuff, seek, $ndp, $rtv)?
+            subdph!($ndp, $rtv, IrParseContext::Tree)
+        };
+    }
+
+    // Sub-node for a while-loop body: inherits a deeper loop depth.
+    macro_rules! subdph_loop_body {
+        ($ndp:expr, $rtv:expr, $ctx:expr) => {
+            parse_ir_node_must(stuff, seek, $ndp, $rtv, $ctx, loop_depth + 1)?
         };
     }
 
@@ -137,10 +278,29 @@ fn parse_ir_node_must(
 
     // parse
     let meta = inst.metadata();
-    if inst == DUPN {
+    if meta.output > 1 {
+        // I-11: any opcode whose runtime output > 1 (including the `255`
+        // dynamic-output marker used by `DUPN`/`REV`) cannot be expressed as
+        // a single IRNode in the tree — a tree node has at most one stack
+        // result. Such ops must be wrapped in a raw `IRBYTECODE` fragment.
         return itr_err_fmt!(
             InstInvalid,
-            "DUPN has dynamic multi-output and is not representable in IRNode"
+            "{:?} has multi-output and is not representable in IRNode",
+            inst
+        );
+    }
+    if meta.input == 255 && !is_dynamic_stack_opcode_allowed(inst, context) {
+        return itr_err_fmt!(
+            InstInvalid,
+            "{:?} has dynamic stack input and is not representable as a standalone IRNode",
+            inst
+        );
+    }
+    if is_hidden_stack_input_opcode(inst) && !is_stack_value_opcode_allowed(inst, context) {
+        return itr_err_fmt!(
+            InstInvalid,
+            "{:?} reads an existing stack value and is not representable as a standalone IRNode",
+            inst
         );
     }
     let hrtv = meta.output == 1;
@@ -148,21 +308,34 @@ fn parse_ir_node_must(
     irnode = match inst {
         // BYTECODE LIST BLOCK IF WHILE
         IRBYTECODE => {
-            let mut bts = IRNodeBytecodes::default();
             let p = itrp2!();
             let n = u16::from_be_bytes(p);
-            bts.codes = itrbuf!(n as usize);
-            Box::new(bts)
+            let bytes = itrbuf!(n as usize);
+            // Reject IR-only opcodes, absolute jumps, and misaligned
+            // params before they reach codegen. `IRNodeBytecodes::new` is
+            // the single point of truth for what a raw IR fragment is
+            // allowed to contain; routing the parser through it keeps
+            // serialized-IR ingestion on the same gate as in-process
+            // builders.
+            Box::new(IRNodeBytecodes::new(bytes)?)
         }
         IRLIST => {
             let mut list = IRNodeArray::with_opcode(inst);
             let p = itrp2!();
             let n = u16::from_be_bytes(p);
             let ndp = depth + 1;
-            for _i in 0..n {
+            for i in 0..n {
                 // IRLIST is a sequence container; whether it yields a value depends on its last item.
-                list.push(parse_ir_node_must(stuff, seek, ndp, false)?);
+                list.push(parse_ir_node_must(
+                    stuff,
+                    seek,
+                    ndp,
+                    false,
+                    maybe!(i + 1 == n, IrParseContext::StackList, IrParseContext::Tree),
+                    loop_depth,
+                )?);
             }
+            validate_irlist_stack_tail(&list.subs)?;
             Box::new(list)
         }
         IRBLOCK | IRBLOCKR => {
@@ -194,11 +367,13 @@ fn parse_ir_node_must(
         }
         IRWHILE => {
             let ndp = depth + 1;
+            // While condition stays in the surrounding loop scope; only the body
+            // opens a new loop scope where IRBREAK/IRCONTINUE become legal.
             Box::new(IRNodeDouble {
                 hrtv,
                 inst,
                 subx: subdph!(ndp, true),
-                suby: subdph!(ndp, false),
+                suby: subdph_loop_body!(ndp, false, IrParseContext::Tree),
             })
         }
         PBUF | PBUFL => {
@@ -222,9 +397,6 @@ fn parse_ir_node_must(
             if !meta.valid {
                 return itr_err_fmt!(InstInvalid, "bytecode {} not found", inst as u8);
             }
-            if meta.output > 1 && meta.input < 255 {
-                return itr_err_fmt!(InstInvalid, "invalid irnode {}", inst as u8);
-            }
             match (meta.param, meta.input) {
                 // (0, 0) => Box::new(IRNodeLeaf::notext(hrtv, inst)), // leaf
                 (0, 1) => Box::new(IRNodeSingle {
@@ -235,7 +407,15 @@ fn parse_ir_node_must(
                 (0, 2) => Box::new(IRNodeDouble {
                     hrtv,
                     inst,
-                    subx: submust!(),
+                    subx: subdph!(
+                        depth + 1,
+                        true,
+                        maybe!(
+                            inst == UNPACK,
+                            IrParseContext::StackValue,
+                            IrParseContext::Tree
+                        )
+                    ),
                     suby: submust!(),
                 }),
                 (0, 3) => Box::new(IRNodeTriple {
@@ -290,13 +470,21 @@ fn parse_ir_node_must(
                     hrtv,
                     inst,
                     para: itrp1!(),
-                    subx: submust!(),
+                    subx: subdph!(
+                        depth + 1,
+                        true,
+                        maybe!(
+                            inst == PUT,
+                            IrParseContext::StackValue,
+                            IrParseContext::Tree
+                        )
+                    ),
                 }), // params one
                 (2, 1) => Box::new(IRNodeParam2Single {
                     hrtv,
                     inst,
                     para: itrp2!(),
-                    subx: submust!(),
+                    subx: subdph!(depth + 1, true, IrParseContext::Tree),
                 }), // params two
                 (a, 0) => Box::new(IRNodeParams {
                     hrtv,
@@ -307,7 +495,7 @@ fn parse_ir_node_must(
                     hrtv,
                     inst,
                     para: itrbuf!(a as usize),
-                    subx: submust!(),
+                    subx: subdph!(depth + 1, true, IrParseContext::Tree),
                 }),
                 _ => {
                     return itr_err_fmt!(
@@ -316,7 +504,7 @@ fn parse_ir_node_must(
                         inst,
                         meta.param,
                         meta.input
-                    )
+                    );
                 }
             }
         }
@@ -371,13 +559,134 @@ mod tests {
     }
 
     #[test]
-    fn dupn_is_rejected_by_irnode_parser() {
-        let bytes: Vec<u8> = vec![DUPN as u8, 2];
+    fn multi_output_opcodes_are_rejected_by_irnode_parser() {
+        for inst in [DUPN, REV] {
+            let bytes: Vec<u8> = vec![inst as u8, 2];
+            let mut seek = 0usize;
+            let err = parse_ir_node_one(&bytes, &mut seek)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("multi-output"), "{}", err);
+        }
+    }
+
+    #[test]
+    fn dynamic_stack_tail_opcodes_are_rejected_outside_irlist() {
+        let cases = [
+            vec![POPN as u8, 1],
+            vec![JOIN as u8, 3],
+            vec![PACKLIST as u8],
+            vec![PACKMAP as u8],
+            vec![PACKTUPLE as u8],
+        ];
+        for bytes in cases {
+            let mut seek = 0usize;
+            let err = parse_ir_node_one(&bytes, &mut seek)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("dynamic stack input"), "{}", err);
+        }
+    }
+
+    #[test]
+    fn hidden_stack_input_opcodes_are_rejected_outside_stack_value_context() {
+        // DUP / ROLL0 have no params and implicitly read top of stack — they
+        // cannot stand alone as IR nodes in tree context. ROLL is excluded
+        // here because it carries an explicit u8 stack offset and is
+        // represented as IRNodeParam1.
+        let cases = [vec![DUP as u8], vec![ROLL0 as u8]];
+        for bytes in cases {
+            let mut seek = 0usize;
+            let err = parse_ir_node_one(&bytes, &mut seek)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("existing stack value"), "{}", err);
+        }
+    }
+
+    #[test]
+    fn param_prelude_roll0_shapes_remain_allowed() {
+        let cases = [
+            (
+                vec![PUT as u8, 0, ROLL0 as u8],
+                vec![ROLL0 as u8, PUT as u8, 0],
+            ),
+            (
+                vec![UNPACK as u8, ROLL0 as u8, P0 as u8],
+                vec![ROLL0 as u8, P0 as u8, UNPACK as u8],
+            ),
+        ];
+        for (bytes, expected_codegen) in cases {
+            let mut seek = 0usize;
+            let node = parse_ir_node_one(&bytes, &mut seek).expect("parse param prelude");
+            assert!(!node.hasretval());
+            assert_eq!(seek, bytes.len());
+            assert_eq!(node.codegen().unwrap(), expected_codegen);
+        }
+    }
+
+    #[test]
+    fn stack_value_context_only_allows_roll0() {
+        // In a StackValue slot, only ROLL0 is permitted. DUP would create an
+        // ambiguity about which existing stack value the surrounding op is
+        // reading. ROLL is a regular IRNodeParam1 elsewhere; it isn't tested
+        // here because it can't appear directly in a StackValue context.
+        for inst in [DUP] {
+            let bytes = vec![PUT as u8, 0, inst as u8];
+            let mut seek = 0usize;
+            let err = parse_ir_node_one(&bytes, &mut seek)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("existing stack value"), "{}", err);
+        }
+    }
+
+    #[test]
+    fn stack_value_context_is_not_available_to_local_ops() {
+        for inst in [XOP, XLG] {
+            let bytes = vec![inst as u8, 0, ROLL0 as u8];
+            let mut seek = 0usize;
+            let err = parse_ir_node_one(&bytes, &mut seek)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("existing stack value"), "{}", err);
+        }
+    }
+
+    #[test]
+    fn irlist_allows_stack_tail_pack_opcodes() {
+        let bytes = vec![IRLIST as u8, 0, 3, P1 as u8, P1 as u8, PACKLIST as u8];
         let mut seek = 0usize;
-        let err = parse_ir_node_one(&bytes, &mut seek)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("dynamic multi-output"), "{}", err);
+        let node = parse_ir_node_one(&bytes, &mut seek).expect("parse packed IRLIST");
+        assert!(node.hasretval());
+        assert_eq!(seek, bytes.len());
+        assert_eq!(
+            node.codegen().unwrap(),
+            vec![P1 as u8, P1 as u8, PACKLIST as u8]
+        );
+    }
+
+    #[test]
+    fn irlist_rejects_malformed_stack_tail_pack_opcodes() {
+        let cases = [
+            vec![IRLIST as u8, 0, 1, PACKLIST as u8],
+            vec![IRLIST as u8, 0, 2, P2 as u8, PACKLIST as u8],
+            vec![IRLIST as u8, 0, 3, P1 as u8, P2 as u8, PACKMAP as u8],
+        ];
+        for bytes in cases {
+            let mut seek = 0usize;
+            assert!(parse_ir_node_one(&bytes, &mut seek).is_err());
+        }
+    }
+
+    #[test]
+    fn pop_remains_allowed_for_empty_param_prelude() {
+        let bytes = vec![POP as u8];
+        let mut seek = 0usize;
+        let node = parse_ir_node_one(&bytes, &mut seek).expect("parse POP prelude");
+        assert!(!node.hasretval());
+        assert_eq!(seek, bytes.len());
+        assert_eq!(node.codegen().unwrap(), bytes);
     }
 
     #[test]
@@ -420,17 +729,22 @@ mod tests {
         let mut seek = 0usize;
         let parsed = parse_ir_node_one(&bytes, &mut seek).unwrap();
         assert_eq!(seek, bytes.len());
-        assert!(parsed
-            .as_any()
-            .downcast_ref::<IRNodeParam1Triple>()
-            .is_some());
+        assert!(
+            parsed
+                .as_any()
+                .downcast_ref::<IRNodeParam1Triple>()
+                .is_some()
+        );
     }
 
     #[test]
     fn malformed_fin_ir_is_rejected() {
         let bytes = vec![
             Bytecode::FIN4 as u8,
-            fin_source_call_spec("mul_add_div_floor").unwrap().unwrap().id,
+            fin_source_call_spec("mul_add_div_floor")
+                .unwrap()
+                .unwrap()
+                .id,
             Bytecode::P1 as u8,
         ];
         let mut seek = 0usize;

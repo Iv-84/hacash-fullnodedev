@@ -12,16 +12,6 @@ pub fn checked_func_sign(s: &[u8]) -> VmrtRes<FnSign> {
     Ok(s.to_vec().try_into().unwrap())
 }
 
-pub trait ToHex {
-    fn to_hex(&self) -> String;
-}
-
-impl ToHex for [u8; FN_SIGN_WIDTH] {
-    fn to_hex(&self) -> String {
-        hex::encode(self)
-    }
-}
-
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
 pub enum FnConf {

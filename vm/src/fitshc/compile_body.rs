@@ -1,9 +1,9 @@
 use crate::IRNode;
-use crate::ir::{IRNodeArray, IRNodeLeaf, convert_ir_to_runtime_bytecode, drop_irblock_wrap};
-use crate::ir::{push_addr, push_bytes, push_num};
+use crate::ir::{IRNodeArray, convert_ir_to_runtime_bytecode, drop_irblock_wrap};
 use crate::lang::Syntax;
-use crate::rt::{Bytecode, KwTy, SourceMap, Token, verify_bytecodes};
+use crate::rt::{KwTy, SourceMap, Token, verify_bytecodes};
 use crate::value::ValueTy;
+use dyn_clone::clone_box;
 use field::Address;
 use sys::Ret;
 
@@ -13,55 +13,6 @@ pub enum CompiledCode {
     Bytecode(Vec<u8>),
 }
 
-/// Parse a constant value string into an IRNode
-/// Format: "type:value" where type is the internal constant tag such as uint, bool, bytes, address, or string
-fn parse_const_value(value_str: &str) -> Ret<Box<dyn IRNode>> {
-    if value_str.starts_with("uint:") {
-        let num_str = &value_str[5..];
-        let num: u128 = num_str
-            .parse()
-            .map_err(|_| format!("invalid uint constant: {}", value_str))?;
-        return Ok(push_num(num));
-    }
-    if value_str.starts_with("bool:") {
-        let bool_str = &value_str[5..];
-        return Ok(match bool_str {
-            "true" => Box::new(IRNodeLeaf {
-                hrtv: true,
-                inst: Bytecode::PTRUE,
-                text: "true".to_string(),
-            }),
-            "false" => Box::new(IRNodeLeaf {
-                hrtv: true,
-                inst: Bytecode::PFALSE,
-                text: "false".to_string(),
-            }),
-            _ => return Err(format!("invalid bool constant: {}", value_str).into()),
-        });
-    }
-    if value_str.starts_with("bytes:0x") {
-        let hex_str = &value_str["bytes:0x".len()..];
-        let bytes = hex::decode(hex_str)
-            .map_err(|_| format!("invalid hex bytes constant: {}", value_str))?;
-        return push_bytes(&bytes);
-    }
-    if value_str.starts_with("address:") {
-        let addr_str = &value_str[8..];
-        let addr = Address::from_readable(addr_str)
-            .map_err(|_| format!("invalid address constant: {}", value_str))?;
-        return Ok(push_addr(addr));
-    }
-    if value_str.starts_with("string:") {
-        let str_content = &value_str[7..];
-        let bytes = str_content.as_bytes().to_vec();
-        return push_bytes(&bytes);
-    }
-    if let Ok(num) = value_str.parse::<u128>() {
-        return Ok(push_num(num));
-    }
-    Err(format!("unrecognized constant format: {}", value_str).into())
-}
-
 #[cfg(test)]
 mod compile_body_tests {
     use super::*;
@@ -69,8 +20,10 @@ mod compile_body_tests {
 
     #[test]
     fn parse_const_bytes_keeps_first_byte() {
-        let parsed = parse_const_value("bytes:0x575459").unwrap();
-        let expected = push_bytes(&vec![0x57, 0x54, 0x59]).unwrap();
+        let parsed = crate::lang::parse_const_literal(Token::Bytes(vec![0x57, 0x54, 0x59]), None)
+            .unwrap()
+            .node;
+        let expected = crate::ir::push_bytes(&vec![0x57, 0x54, 0x59]).unwrap();
         assert_eq!(parsed.serialize(), expected.serialize());
     }
 
@@ -90,7 +43,9 @@ mod compile_body_tests {
 
     #[test]
     fn manual_param_block_with_empty_signature_compiles() {
-        let body_tokens = Tokenizer::new(b"param { a b }\nreturn a + b").parse().unwrap();
+        let body_tokens = Tokenizer::new(b"param { a b }\nreturn a + b")
+            .parse()
+            .unwrap();
         let _ = compile_body(body_tokens, vec![], &[], &[], true).unwrap();
     }
 }
@@ -100,10 +55,12 @@ pub fn compile_body(
     body_tokens: Vec<Token>,
     args: Vec<(String, ValueTy)>,
     libs: &[(String, Address)],
-    consts: &[(String, String)],
+    consts: &[(String, Box<dyn IRNode>)],
     is_ircode: bool,
 ) -> Ret<(IRNodeArray, CompiledCode, SourceMap)> {
-    let has_manual_param_block = body_tokens.iter().any(|tk| matches!(tk, Token::Keyword(KwTy::Param)));
+    let has_manual_param_block = body_tokens
+        .iter()
+        .any(|tk| matches!(tk, Token::Keyword(KwTy::Param)));
     let mut syntax = Syntax::new(body_tokens);
 
     if !libs.is_empty() {
@@ -119,8 +76,8 @@ pub fn compile_body(
 
     if !consts.is_empty() {
         let mut const_nodes = Vec::with_capacity(consts.len());
-        for (name, value_str) in consts {
-            const_nodes.push((name.clone(), parse_const_value(value_str)?));
+        for (name, node) in consts {
+            const_nodes.push((name.clone(), clone_box(node.as_ref())));
         }
         syntax = syntax.with_consts(const_nodes);
     }

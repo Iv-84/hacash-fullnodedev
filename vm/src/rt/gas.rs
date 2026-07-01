@@ -318,12 +318,15 @@ impl GasExtra {
 
     #[inline(always)]
     pub fn heap_grow_gas(&self, oldseg: usize, seg: usize, limit: usize) -> VmrtRes<i64> {
-        if oldseg + seg > limit {
+        let newseg = oldseg
+            .checked_add(seg)
+            .ok_or_else(|| ItrErr::new(OutOfHeap, "heap segment overflow"))?;
+        if newseg > limit {
             return Err(ItrErr::new(OutOfHeap, "out of heap"));
         }
         // Gas is an abstraction of space usage: the first 8 segments are charged exponentially (2,4,8,16,32,64,128,256), then linear 256 per segment. Price is based on existing heap size so multiple HGROW(1) cannot bypass.
         let mut gas: u64 = 0;
-        for s in oldseg..(oldseg + seg) {
+        for s in oldseg..newseg {
             let add = if s < self.heap_grow_exp_segments {
                 1u64.checked_shl((s + 1) as u32).unwrap_or(u64::MAX)
             } else {

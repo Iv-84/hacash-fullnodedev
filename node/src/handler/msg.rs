@@ -19,8 +19,8 @@ pub fn is_inner_msg_ty(ty: u16) -> bool {
 
 
 pub enum BlockTxArrive {
-    Block(Option<Arc<Peer>>, Vec<u8>),
-    Tx(Option<Arc<Peer>>, Vec<u8>),
+    Block(Option<Arc<Peer>>, Vec<u8>, Option<std::sync::mpsc::SyncSender<Rerr>>),
+    Tx(Option<Arc<Peer>>, Vec<u8>, Option<std::sync::mpsc::SyncSender<Rerr>>),
 }
 
 combi_struct!{ HandshakeStatus,
@@ -33,4 +33,3 @@ combi_struct!{ HandshakeStatus,
     latest_height:           BlockHeight
     latest_hash:             Hash
 }
-

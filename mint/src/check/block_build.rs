@@ -27,6 +27,7 @@ fn impl_packing_next_block(
         engcnf.miner_message.clone(),
         engcnf.miner_reward_address.clone(),
     );
+    let block_author = cbtx.author().unwrap_or_default();
     // create block v1
     let mut intro = BlockIntro {
         head: BlockHead {
@@ -63,6 +64,7 @@ fn impl_packing_next_block(
         &mut trshxs,
         &mut transactions,
         cbtx.size(),
+        block_author,
         engine,
         txpool,
     );
@@ -105,6 +107,7 @@ fn append_valid_tx_pick_from_txpool(
     trshxs: &mut Vec<Hash>,
     trs: &mut DynVecTransaction,
     base_tx_size: usize,
+    block_author: Address,
     engine: &dyn EngineRead,
     txpool: &dyn TxPool,
 ) {
@@ -132,7 +135,7 @@ fn append_valid_tx_pick_from_txpool(
     macro_rules! check_pick_one_tx {
         ($a: expr) => {
             let txr = $a.tx_read();
-            if let Err(..) = engine.try_execute_tx_by(txr, pending_hei, &mut sub_state) {
+            if let Err(..) = engine.try_execute_tx_by_author(txr, pending_hei, &mut sub_state, block_author.clone()) {
                 invalidtxhxs.push(txr.hash());
                 return true; // execute fail, ignore, next
             };
@@ -382,6 +385,18 @@ mod tests {
         ) -> Rerr {
             Ok(())
         }
+        fn try_execute_tx_by_author(
+            &self,
+            _: &dyn TransactionRead,
+            _: u64,
+            _: &mut Box<dyn State>,
+            author: Address,
+        ) -> Rerr {
+            if author != self.cnf.miner_reward_address {
+                return errf!("unexpected pre-exec block author");
+            }
+            Ok(())
+        }
     }
 
     fn make_prev_blk(height: u64, timestamp: u64, difficulty: u32) -> DummyBlock {
@@ -411,7 +426,7 @@ mod tests {
         let txp = TxPkg::create(Box::new(tx));
         let tp = OneTxPool { tx: txp };
 
-        let mut cnf = EngineConf::new(&IniObj::default(), 0);
+        let mut cnf = EngineConf::new(&IniObj::default());
         cnf.max_block_txs = 10;
         cnf.max_block_size = 1_000_000;
         cnf.max_tx_size = 100_000;
@@ -419,7 +434,8 @@ mod tests {
         cnf.lowest_fee_purity = 0;
         cnf.contract_cache_size = 0.0;
         cnf.miner_message = Fixed16::default();
-        cnf.miner_reward_address = Address::default();
+        cnf.miner_reward_address =
+            Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
 
         (
             TestEngine {

@@ -74,12 +74,14 @@ Fitsh 编译为 IR 字节码。该 IR 可通过 `format_ircode_to_lang` 或 `irc
 ### 3.1 顶层语法
 
 ```fitsh
+pragma fitsh 1.0.0
+
 contract ContractName {
 
     deploy {
-        protocol_cost: "1:248",
-        nonce: 1,
-        construct_argv: "0xaabb2244"
+        protocol_cost: amount("1:248"),
+        nonce: 1u32,
+        construct_argv: 0xaabb2244
     }
 
     library [
@@ -111,6 +113,12 @@ contract ContractName {
 | `inherit [ ... ]` | 继承链的 `Name: Address` 对 |
 | `abstract Name(...) { ... }` | 系统支付钩子；返回 0 表示允许，非零表示拒绝 |
 
+`pragma fitsh x.y.z` 必须是源码第一条有效语句。当前编译器版本为 `1.0.0`：
+
+- `x` 表示非兼容主版本；主版本不一致会被拒绝。
+- `y` 表示兼容的重大功能版本；源码要求更高 minor 时，旧编译器会拒绝。
+- `z` 表示等效修改/小优化版本；patch 不一致时可编译，但会给出提示。
+
 ### 3.3 函数声明
 
 ```fitsh
@@ -118,12 +126,47 @@ function [external] [ircode|bytecode] name(param1: type1, param2: type2) -> ret_
 ```
 
 - `external`：标记该函数可被 `CALL`（`External`）路径调用
-- `ircode`：编译为 IR（合约函数默认）
+- `ircode`：编译为 IR
 - `bytecode`：编译为原始字节码
+- 省略时，函数体默认编译为字节码。
+- 修饰符顺序固定：`external` 在前，然后最多出现一个 `ircode` 或 `bytecode`。
+- `virtual`、`inner`、`view`、`pure`、`struct` 在 Fitsh 1.0.0 严格源码中保留但未支持。
 
 可见性说明：
 - `external` 是外部调用解析使用的运行时可见性标记。
 - 若命名在实践中容易误导，可在后续版本引入更清晰的别名。
+
+### 3.4 部署配置
+
+`deploy { ... }` 是严格部署配置块，不是运行期 `map`。
+
+```fitsh
+deploy {
+    protocol_cost: amount("1:248"),
+    nonce: 1u32,
+    construct_argv: 0xaabb2244
+}
+```
+
+- `protocol_cost` 必须使用 `amount("...")`。
+- `nonce` 必须在 `u32` 范围内，推荐写 `u32` 后缀。
+- `construct_argv` 必须是 bytes 字面量（`0x...`、`0b...` 或 ASCII 引号字节串）。
+- 字段名不能重复。
+- 每个字段名后必须写冒号。
+
+### 3.5 常量
+
+顶层和函数体常量共享同一套字面量语法：
+
+```fitsh
+const NAME [: type] = literal
+const LIMIT: u64 = 100
+const ENABLED: bool = true
+const OWNER: address = emqjNS9PscqdBpMtnC3Jfuc4mvZUPYTPS
+const TAG: bytes = 0xaabb
+```
+
+常量只接受编译期字面量：整数、bool、bytes、char 或 address；不接受任意表达式。
 
 ---
 

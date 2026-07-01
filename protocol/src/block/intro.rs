@@ -47,7 +47,9 @@ impl BlockExec for BlockHeadMeta {}
 
 impl BlockRead for BlockHeadMeta {
     fn hash(&self) -> Hash {
-        let intro = vec![self.head.serialize(), self.meta.serialize()].concat();
+        let mut intro = Vec::with_capacity(self.head.size() + self.meta.size());
+        self.head.serialize_to(&mut intro);
+        self.meta.serialize_to(&mut intro);
         let hx = super::setup::do_block_hash(self.head.height.uint(), &intro);
         Hash::must(&hx[..])
     }

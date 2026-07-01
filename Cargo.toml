@@ -31,6 +31,7 @@ exclude = [
     "node2",
     "node3",
     "node5",
+    "next",
 ]
 
 [dependencies]

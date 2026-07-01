@@ -30,7 +30,7 @@ fn finish_ntcall(
 macro_rules! itrparam {
     ($codes: expr, $pc: expr, $l: expr, $t: ty) => {{
         let r = $pc + $l;
-        #[cfg(debug_assertions)]
+        //#[cfg(debug_assertions)]
         if r < $pc || r > $codes.len() {
             return itr_err_code!(CodeOverflow);
         }
@@ -55,7 +55,7 @@ macro_rules! itrparamu16 {
 macro_rules! peekparam {
     ($codes: expr, $pc: expr, $l: expr, $t: ty) => {{
         let _r = $pc + $l;
-        #[cfg(debug_assertions)]
+        // #[cfg(debug_assertions)]
         if _r < $pc || _r > $codes.len() {
             return itr_err_code!(CodeOverflow);
         }
@@ -333,10 +333,10 @@ pub fn execute_code_in_frame<H: VmHost + ?Sized>(
     // start run
     loop {
         // read inst
-        debug_assert!(*pc < codes.len());
-        // if *pc >= codes.len() {
-        //     return itr_err_code!(CodeOverflow)
-        // }
+        // #[cfg(debug_assertions)]  // uncomment for debug-only check
+        if *pc >= codes.len() {
+            return itr_err_code!(CodeOverflow)
+        }
         let instbyte = unsafe { *codes.get_unchecked(*pc as usize) }; // u8
         let instruction: Bytecode = std_mem_transmute!(instbyte);
         *pc += 1; // next
@@ -458,12 +458,8 @@ pub fn execute_code_in_frame<H: VmHost + ?Sized>(
 
         macro_rules! compare_gas {
             () => {{
-                if ops.datas.len() >= 2 {
-                    let l = ops.datas.len();
-                    gas_resource!(
-                        stack_cmp,
-                        lgc_compare_fee(&ops.datas[l - 2], &ops.datas[l - 1], gst)
-                    );
+                if let (Some(a), Some(b)) = (ops.tail(1), ops.tail(0)) {
+                    gas_resource!(stack_cmp, lgc_compare_fee(a, b, gst));
                 }
             }};
         }
@@ -684,37 +680,22 @@ pub fn execute_code_in_frame<H: VmHost + ?Sized>(
                     ops.datas.truncate(l - 2);
                 } /* choose(cond, yes, no) */
                 CAT => {
-                    let (xlen, ylen) = match ops.datas.len() {
-                        l if l >= 2 => (ops.datas[l - 2].val_size(), ops.datas[l - 1].val_size()),
-                        _ => (0, 0),
-                    };
-                    gas_resource!(stack_op, xlen + ylen);
+                    gas_resource!(stack_op, ops.tail_val_size(1)? + ops.tail_val_size(0)?);
                     ops.cat(cap)?;
                 }
                 JOIN => {
                     let n = pu8!();
-                    let total = {
-                        let l = ops.datas.len();
-                        let n = n as usize;
-                        if n > l {
-                            0
-                        } else {
-                            ops.datas[l - n..].iter().map(|v| v.val_size()).sum()
-                        }
-                    };
-                    gas_resource!(stack_op, total);
+                    gas_resource!(stack_op, ops.tail_val_size_sum(n as usize)?);
                     ops.join(n, cap)?;
                 }
                 BYTE => {
-                    let outlen = ops.peek()?.val_size();
-                    gas_resource!(stack_op, outlen);
+                    gas_resource!(stack_op, ops.tail_val_size(1)?);
                     let i = ops_pop_to_u16!();
                     ops.peek()?.cutbyte(i)?;
                 }
                 CUT => {
                     let (l, o) = (ops.pop()?, ops.pop()?);
-                    let outlen = ops.peek()?.val_size();
-                    gas_resource!(stack_op, outlen);
+                    gas_resource!(stack_op, ops.tail_val_size(0)?);
                     ops.peek()?.cutout(l, o)?;
                 }
                 LEFT => peek_op_gas!(cutleft(pu8_as_u16!())),

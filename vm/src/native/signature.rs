@@ -27,7 +27,11 @@ mod signature_native_tests {
     use super::*;
 
     fn argv(hash: &Hash, addr: &field::Address, sign: &Sign) -> Vec<u8> {
-        vec![hash.serialize(), addr.serialize(), sign.serialize()].concat()
+        let mut out = Vec::with_capacity(hash.size() + addr.size() + sign.size());
+        hash.serialize_to(&mut out);
+        addr.serialize_to(&mut out);
+        sign.serialize_to(&mut out);
+        out
     }
 
     #[test]

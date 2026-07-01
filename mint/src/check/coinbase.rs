@@ -131,6 +131,12 @@ fn verify_coinbase_privakey(cbtx: &dyn TransactionRead) -> Rerr {
             return errf!("coinbase address {} must be PRIVAKEY type but got version {}",
                 addr.to_readable(), addr.version())
         }
+        if addr.is_privakey_unknown() {
+            return errf!(
+                "coinbase address {} is a system address with unknown private key",
+                addr.to_readable()
+            )
+        }
     }
     Ok(())
 }

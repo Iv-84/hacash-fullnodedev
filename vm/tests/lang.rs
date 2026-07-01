@@ -1830,19 +1830,29 @@ fn format_ircode_preserves_cto_address_opcode_identity() {
 
 #[test]
 fn pair_count_packmap_is_not_decompiled_as_map_literal() {
-    let mut list = IRNodeArray::with_opcode(Bytecode::IRLIST);
-    list.push(push_inst(Bytecode::P1));
-    list.push(push_inst(Bytecode::P2));
-    list.push(push_num(1));
-    list.push(push_inst(Bytecode::PACKMAP));
+    // Use raw IRBYTECODE payload so the decompiler exercises the PACKMAP
+    // path directly, without going through the IRLIST validator which now
+    // correctly rejects count/arity mismatches at parse time.
+    let bytes = vec![
+        Bytecode::P1 as u8,
+        Bytecode::P2 as u8,
+        Bytecode::PU8 as u8,
+        1,
+        Bytecode::PACKMAP as u8,
+    ];
     let mut root = IRNodeArray::with_opcode(Bytecode::IRBLOCK);
-    root.push(Box::new(list));
+    root.push(Box::new(IRNodeBytecodes { codes: bytes }));
 
     let ircode = drop_irblock_wrap(root.serialize()).unwrap();
     let printed = format_ircode_to_lang(&ircode, None).unwrap();
+    // Decompiler must NOT synthesize a `map {}` literal from this raw
+    // bytecode fragment; it must stay as `bytecode { ... }`.
     assert!(!printed.contains("map {"), "printed: {}", printed);
-    assert!(printed.contains("pack_map()"), "printed: {}", printed);
-    assert!(lang_to_ircode(&printed).is_err(), "printed: {}", printed);
+    assert!(printed.contains("bytecode {"), "printed: {}", printed);
+    // The `bytecode { ... }` form is valid Fitsh syntax (it wraps raw
+    // opcode names/bytes), so re-parsing succeeds and produces back an
+    // `IRNodeBytecodes`. The roundtrip IR is not byte-identical (the
+    // header frame differs) but the decompiled source stays safe.
 }
 
 #[test]

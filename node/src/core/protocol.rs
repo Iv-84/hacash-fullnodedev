@@ -32,34 +32,42 @@ impl ProtocolAdapter {
         if only_insert_txpool {
             let minter = engine.minter();
             minter.tx_submit(engine.as_read(), txpkg)?;
-            let _ = txpool.insert_by(txpkg.clone(), &|tx| minter.tx_pool_group(tx));
+            txpool.insert_by(txpkg.clone(), &|tx| minter.tx_pool_group(tx))?;
             return Ok(());
         }
         let handler = self.handler.clone();
         let txbody = txpkg.data().to_vec();
-        let runobj = async move {
-            handler.submit_transaction(txbody).await;
-        };
         if in_async {
+            let runobj = async move {
+                handler.submit_transaction(txbody).await;
+            };
             tokio::spawn(runobj);
+            Ok(())
         } else {
-            new_current_thread_tokio_rt().block_on(runobj);
+            if handler.is_loop_started() {
+                handler.submit_transaction_wait(txbody)
+            } else {
+                new_current_thread_tokio_rt().block_on(handle_new_tx(handler, None, txbody))
+            }
         }
-        Ok(())
     }
 
     pub(super) fn submit_block(&self, blkpkg: &BlkPkg, in_async: bool) -> Rerr {
         let handler = self.handler.clone();
         let blkbody = blkpkg.data().to_vec();
-        let runobj = async move {
-            handler.submit_block(blkbody).await;
-        };
         if in_async {
+            let runobj = async move {
+                handler.submit_block(blkbody).await;
+            };
             tokio::spawn(runobj);
+            Ok(())
         } else {
-            new_current_thread_tokio_rt().block_on(runobj);
+            if handler.is_loop_started() {
+                handler.submit_block_wait(blkbody)
+            } else {
+                new_current_thread_tokio_rt().block_on(handle_new_block(handler, None, blkbody))
+            }
         }
-        Ok(())
     }
 
     pub(super) fn exit(&self) {
@@ -301,69 +309,90 @@ pub(crate) async fn receive_blocks(hdl: &MsgHandler, peer: Arc<Peer>, mut buf: V
     send_req_block_msg(hdl, peer, end_hei + 1).await;
 }
 
-pub(crate) async fn handle_new_tx(hdl: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec<u8>) {
+pub(crate) async fn handle_new_tx(
+    hdl: Arc<MsgHandler>,
+    peer: Option<Arc<Peer>>,
+    body: Vec<u8>,
+) -> Rerr {
     let engcnf = hdl.engine.config();
     let minter = hdl.engine.minter();
     let Ok(txpkg) = protocol::transaction::build_tx_package(body) else {
-        return;
+        return errf!("tx parse failed");
     };
     let hxfe = txpkg.tx().hash_with_fee();
     // println!("handle_new_tx: {:?}", hxfe.to_hex());
     let (already, knowkey) = check_know(&hdl.knows, &hxfe, peer.clone());
     if already {
-        return;
+        if peer.is_some() || hdl.txpool.find(&txpkg.hash()).is_some() {
+            return Ok(());
+        }
     }
     if txpkg.fpur() < engcnf.lowest_fee_purity {
-        return;
+        return errf!(
+            "tx fee purity {} too low, need at least {}",
+            txpkg.fpur(),
+            engcnf.lowest_fee_purity
+        );
     }
     if txpkg.data().len() > engcnf.max_tx_size {
-        return;
+        return errf!("tx size exceeds max_tx_size");
     }
     let txdatas = txpkg.data().to_vec();
     let txpr = txpkg.tx_read();
-    if let Err(..) = hdl.engine.try_execute_tx(txpr) {
-        return;
-    }
-    if let Err(..) = minter.tx_submit(hdl.engine.as_read(), &txpkg) {
-        return;
-    }
-    let res = hdl.txpool.insert_by(txpkg, &|tx| minter.tx_pool_group(tx));
-    if let Err(..) = res {
-        return;
-    }
+    hdl.engine.try_execute_tx(txpr)?;
+    minter.tx_submit(hdl.engine.as_read(), &txpkg)?;
+    hdl.txpool
+        .insert_by(txpkg, &|tx| minter.tx_pool_group(tx))?;
     let p2p = hdl.p2pmng.lock().unwrap();
-    let p2p = p2p.as_ref().unwrap();
-    p2p.broadcast_message(0, knowkey, MSG_TX_SUBMIT, txdatas);
+    if let Some(p2p) = p2p.as_ref() {
+        p2p.broadcast_message(0, knowkey, MSG_TX_SUBMIT, txdatas);
+    }
+    Ok(())
 }
 
-pub(crate) async fn handle_new_block(hdl: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec<u8>) {
+pub(crate) async fn handle_new_block(
+    hdl: Arc<MsgHandler>,
+    peer: Option<Arc<Peer>>,
+    body: Vec<u8>,
+) -> Rerr {
     let eng = hdl.engine.clone();
     let engcnf = eng.config();
-    if body.len() > engcnf.max_block_size {
-        return;
+    if body.len() > engcnf.max_block_size + 100 {
+        return errf!("block size exceeds max_block_size");
     }
     let mut blkhead = protocol::block::BlockIntro::default();
     if let Err(..) = blkhead.parse(&body) {
-        return;
+        return errf!("block intro parse failed");
     }
     let blkhei = blkhead.height().uint();
     let blkhx = blkhead.hash();
+    let sto = eng.store();
     let (already, knowkey) = check_know(&hdl.knows, &blkhx, peer.clone());
     // println!("knows: {:?}", hdl.knows);
     // println!("handle_new_block {} already: {}", blkhx.to_hex(), already);
     if already {
-        return;
+        if peer.is_none() {
+            let inserted = sto
+                .block_hash(&BlockHeight::from(blkhei))
+                .map(|hx| hx == blkhx)
+                .unwrap_or(false);
+            if inserted {
+                return Ok(());
+            }
+        } else {
+            return Ok(());
+        }
     }
     let mintckr = eng.minter();
-    let sto = eng.store();
     if let Some(ret) = mintckr.blk_found(&blkhead, &body, sto.as_ref()) {
         match ret {
-            RetBlkFound::Reject => return,
+            RetBlkFound::Reject => return errf!("block rejected by blk_found"),
             RetBlkFound::PendingCached => {
                 let p2p = hdl.p2pmng.lock().unwrap();
-                let p2p = p2p.as_ref().unwrap();
-                p2p.broadcast_message(0, knowkey, MSG_BLOCK_DISCOVER, body);
-                return;
+                if let Some(p2p) = p2p.as_ref() {
+                    p2p.broadcast_message(0, knowkey, MSG_BLOCK_DISCOVER, body);
+                }
+                return Ok(());
             }
             RetBlkFound::Normal => {}
         }
@@ -374,7 +403,11 @@ pub(crate) async fn handle_new_block(hdl: Arc<MsgHandler>, peer: Option<Arc<Peer
     let latest = eng.latest_block();
     let lathei = latest.height().uint();
     if blkhei <= root_hei {
-        return;
+        return errf!(
+            "block height {} is not above root height {}",
+            blkhei,
+            root_hei
+        );
     }
     if blkhei > lathei + 1 {
         if let Some(ref pr) = peer {
@@ -389,16 +422,17 @@ pub(crate) async fn handle_new_block(hdl: Arc<MsgHandler>, peer: Option<Arc<Peer
                 status.last_height.uint(),
             );
         }
-        return;
+        return errf!(
+            "future block height {} exceeds local head {}",
+            blkhei,
+            lathei
+        );
     }
     if let Err(..) = mintckr.blk_arrive(&blkhead, &body, sto.as_ref()) {
-        return;
+        return errf!("block arrive check failed");
     }
     let blkpkg = protocol::block::build_block_package(body.clone());
-    if let Err(..) = blkpkg {
-        return;
-    }
-    let mut blkp = blkpkg.unwrap();
+    let mut blkp = blkpkg.map_err(|e| format!("block parse failed: {}", e))?;
     blkp.set_origin(BlkOrigin::Discover);
     let hxstrt = blkhx.as_bytes()[4..12].to_vec();
     let hxtail = blkhx.as_bytes()[30..].to_vec();
@@ -433,11 +467,13 @@ pub(crate) async fn handle_new_block(hdl: Arc<MsgHandler>, peer: Option<Arc<Peer
     .await
     .unwrap();
     if res.is_err() {
-        return;
+        return res;
     }
     let p2p = hdl.p2pmng.lock().unwrap();
-    let p2p = p2p.as_ref().unwrap();
-    p2p.broadcast_message(0, knowkey, MSG_BLOCK_DISCOVER, body);
+    if let Some(p2p) = p2p.as_ref() {
+        p2p.broadcast_message(0, knowkey, MSG_BLOCK_DISCOVER, body);
+    }
+    Ok(())
 }
 
 fn check_know(mine: &Knowledge, hxkey: &Hash, peer: Option<Arc<Peer>>) -> (bool, KnowKey) {

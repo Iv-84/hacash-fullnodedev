@@ -49,7 +49,7 @@ impl<'a> ContextInst<'a> {
     }
 
     pub fn gas_used_charge(&self) -> Ret<Amount> {
-        let price = GasPrice::from_tx(self.txr)?;
+        let price = GasPrice::from_tx(self.txr, self.env.block.height)?;
         self.gas.used_charge(&price)
     }
 
@@ -141,6 +141,12 @@ impl<'a> ContextInst<'a> {
         self.debug_assert_tx_bound_consistent();
         if let Some(isok) = self.check_sign_cache.get(adr) {
             return isok.clone().map(|_| ());
+        }
+        if adr.is_privakey_unknown() {
+            return errf!(
+                "address {} is a system address (value < u32::MAX) with unknown private key",
+                adr
+            );
         }
         adr.must_privakey()?;
         let isok = verify_target_signature(adr, self.txr);

@@ -23,6 +23,9 @@ fn diamondminer_success(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
     if mint_number > 1 && act.prev_hash != lastdia.born_hash {
         return api_error("invalid diamond prev hash");
     }
+    if act.address != cnf.dmer_reward_address {
+        return api_error("invalid diamond reward address");
+    }
 
     let bid_addr = Address::from(cnf.dmer_bid_account.address().clone());
     let mut bid_offer = cnf.dmer_bid_min.clone();

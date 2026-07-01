@@ -1055,7 +1055,7 @@ impl DeferredRegistry {
         if self.defer_auth.as_ref() != Some(caller) {
             return itr_err_fmt!(
                 ItrErrCode::DeferredError,
-                "defer not allowed in current abst call"
+                "defer can only be registered from Permit*/Payable* abst entries (defer_auth mismatch)"
             );
         }
         let entry = DeferredEntry {

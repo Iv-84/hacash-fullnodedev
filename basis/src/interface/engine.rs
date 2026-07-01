@@ -16,6 +16,15 @@ pub trait EngineRead: Send + Sync {
 
     fn try_execute_tx(&self, _: &dyn TransactionRead) -> Rerr { never!() }
     fn try_execute_tx_by(&self, _: &dyn TransactionRead, _: u64, _: &mut Box<dyn State>) -> Rerr { never!() }
+    fn try_execute_tx_by_author(
+        &self,
+        tx: &dyn TransactionRead,
+        pd_hei: u64,
+        sub_state: &mut Box<dyn State>,
+        _author: Address,
+    ) -> Rerr {
+        self.try_execute_tx_by(tx, pd_hei, sub_state)
+    }
     // realtime average fee purity
     // fn avgfee(&self) -> u32 { 0 }
 }

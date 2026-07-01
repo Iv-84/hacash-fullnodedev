@@ -12,6 +12,7 @@ pub struct MsgHandler {
     pub(crate) knows: Knowledge,
 
     pub(crate) inserting: Arc<StdMutex<bool>>,
+    handler_thread: StdMutex<Option<std::thread::ThreadId>>,
     exts_by_ty: StdMutex<HashMap<u16, Arc<dyn NodeP2PExtension>>>,
     exts_all: StdMutex<Vec<Arc<dyn NodeP2PExtension>>>,
 }
@@ -30,6 +31,7 @@ impl MsgHandler {
             sync_tracker: SyncTracker::new(),
             knows: Knowledge::new(2000),
             inserting: Arc::new(StdMutex::new(false)),
+            handler_thread: StdMutex::new(None),
             exts_by_ty: StdMutex::new(HashMap::new()),
             exts_all: StdMutex::new(vec![]),
         }
@@ -90,11 +92,60 @@ impl MsgHandler {
     }
 
     pub async fn submit_transaction(&self, body: Vec<u8>) {
-        let _ = self.blktx.send(BlockTxArrive::Tx(None, body)).await;
+        let _ = self.blktx.send(BlockTxArrive::Tx(None, body, None)).await;
     }
 
     pub async fn submit_block(&self, body: Vec<u8>) {
-        let _ = self.blktx.send(BlockTxArrive::Block(None, body)).await;
+        let _ = self.blktx.send(BlockTxArrive::Block(None, body, None)).await;
+    }
+
+    pub fn is_loop_started(&self) -> bool {
+        self.blktxch.lock().unwrap().is_none()
+    }
+
+    pub fn enter_handler_thread(&self) {
+        *self.handler_thread.lock().unwrap() = Some(std::thread::current().id());
+    }
+
+    pub fn leave_handler_thread(&self) {
+        *self.handler_thread.lock().unwrap() = None;
+    }
+
+    fn is_handler_thread(&self) -> bool {
+        let cur = std::thread::current().id();
+        self.handler_thread
+            .lock()
+            .unwrap()
+            .map(|id| id == cur)
+            .unwrap_or(false)
+    }
+
+    fn submit_and_wait(&self, msg: BlockTxArrive) -> Rerr {
+        if self.is_handler_thread() {
+            return errf!("cannot synchronously submit from node message handler thread");
+        }
+        if !self.is_loop_started() {
+            return errf!("node message handler not started");
+        }
+        let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+        let msg = match msg {
+            BlockTxArrive::Tx(peer, body, _) => BlockTxArrive::Tx(peer, body, Some(ack_tx)),
+            BlockTxArrive::Block(peer, body, _) => BlockTxArrive::Block(peer, body, Some(ack_tx)),
+        };
+        self.blktx
+            .try_send(msg)
+            .map_err(|e| format!("node message queue submit failed: {}", e))?;
+        ack_rx
+            .recv()
+            .map_err(|e| format!("node message handler response failed: {}", e))?
+    }
+
+    pub fn submit_transaction_wait(&self, body: Vec<u8>) -> Rerr {
+        self.submit_and_wait(BlockTxArrive::Tx(None, body, None))
+    }
+
+    pub fn submit_block_wait(&self, body: Vec<u8>) -> Rerr {
+        self.submit_and_wait(BlockTxArrive::Block(None, body, None))
     }
 
     pub fn exit(&self) {
@@ -132,8 +183,8 @@ impl MsgHandler {
 
     pub async fn on_message(&self, peer: Arc<Peer>, ty: u16, body: Vec<u8>) {
         match ty {
-            MSG_TX_SUBMIT =>      { let _ = self.blktx.send(BlockTxArrive::Tx(Some(peer.clone()), body)).await; },
-            MSG_BLOCK_DISCOVER => { let _ = self.blktx.send(BlockTxArrive::Block(Some(peer.clone()), body)).await; },
+            MSG_TX_SUBMIT =>      { let _ = self.blktx.send(BlockTxArrive::Tx(Some(peer.clone()), body, None)).await; },
+            MSG_BLOCK_DISCOVER => { let _ = self.blktx.send(BlockTxArrive::Block(Some(peer.clone()), body, None)).await; },
             MSG_BLOCK_HASH =>     { self.receive_hashs(peer, body).await; },
             MSG_REQ_BLOCK_HASH => { self.send_hashs(peer, body).await; },
             MSG_BLOCK =>          { self.receive_blocks(peer, body).await; },

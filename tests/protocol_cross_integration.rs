@@ -678,7 +678,9 @@ fn test_tx_without_ast_allows_nonzero_gasmax_when_topology_is_valid() {
     tx.ty = Uint1::from(TransactionType3::TYPE);
     tx.gas_max = Uint1::from(17);
     let mut act = HacToTrs::new();
-    act.to = AddrOrPtr::from_addr(field::ADDRESS_ONEX.clone());
+    act.to = AddrOrPtr::from_addr(
+        Address::from_readable("1AVRuFXNFi3rdMrPH4hdqSgFrEBnWisWaS").unwrap(),
+    );
     act.hacash = Amount::zhu(1);
     tx.actions.push(Box::new(act)).unwrap();
 

@@ -2423,6 +2423,25 @@ mod bounds_tests {
     }
 
     #[test]
+    fn byte_dynamic_gas_uses_source_value_size_not_index_size() {
+        use crate::rt::Bytecode;
+
+        let run = |buf_len: usize, idx: Value| -> i64 {
+            run_with_setup(
+                vec![Bytecode::BYTE as u8, Bytecode::END as u8],
+                DummyHost::default(),
+                |ops, _locals, _heap, _global_map, _memory_map, _cadr| {
+                    ops.push(Value::Bytes(vec![9u8; buf_len])).unwrap();
+                    ops.push(idx).unwrap();
+                },
+            )
+        };
+
+        assert_eq!(run(21, Value::U8(0)), run(20, Value::U8(0)) + 1);
+        assert_eq!(run(64, Value::U8(0)), run(64, Value::U16(0)));
+    }
+
+    #[test]
     fn actview_meters_input_and_return_bytes() {
         use crate::rt::Bytecode;
 

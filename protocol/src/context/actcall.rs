@@ -2,7 +2,9 @@ use crate::action;
 
 fn ctx_action_call(this: &mut dyn Context, k: u16, b: Vec<u8>) -> XRet<(u32, Vec<u8>)> {
     // create
-    let body = vec![k.to_be_bytes().to_vec(), b].concat();
+    let mut body = Vec::with_capacity(2 + b.len());
+    body.extend_from_slice(&k.to_be_bytes());
+    body.extend_from_slice(&b);
     let (action, used) = action::action_create(&body)?;
     if used != body.len() {
         return xerrf!(

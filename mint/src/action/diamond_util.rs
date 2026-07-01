@@ -1,4 +1,3 @@
-
 /**
  * Diamond Constant
  */
@@ -20,36 +19,26 @@ pub const DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BIDDING_FEE: u32 = 4_1000;
 // 107001 diamond, hip-18 & hip-19
 pub const DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST: u32 = 10_7000;
 
-
-
-
-
-
-
 /*************** util ***************/
 
-
-
-
 const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
-
 
 /**
  * calculate diamond visual gene
 */
-pub fn calculate_diamond_visual_gene(name: &[u8;6], life_gene: &[u8;32]) -> DiamondVisualGene {
+pub fn calculate_diamond_visual_gene(name: &[u8; 6], life_gene: &[u8; 32]) -> DiamondVisualGene {
     let mut genehexstr = [b'0'; 20];
     // step 1
     let searchgx = |x| {
         for (i, a) in x16rs::DIAMOND_NAME_VALID_CHARS.iter().enumerate() {
             if *a == x {
-                return HEX_CHARS[i]
+                return HEX_CHARS[i];
             }
         }
         panic!("not supply diamond char!!!")
     };
     for i in 0..6 {
-        genehexstr[i+2] = searchgx( name[i] );
+        genehexstr[i + 2] = searchgx(name[i]);
     }
     // step 2
     let mut idx = 8;
@@ -65,38 +54,59 @@ pub fn calculate_diamond_visual_gene(name: &[u8;6], life_gene: &[u8;32]) -> Diam
     DiamondVisualGene::from(genehex.try_into().unwrap())
 }
 
-
-
 /**
- * calculate diamond visual gene
+ * calculate diamond life gene
 */
-pub fn calculate_diamond_gene(dianum: u32, diamhash: &[u8;32], diamondstr: &[u8;16], pedding_block_hash: &Hash, diabidfee: &Amount) -> (DiamondLifeGene, DiamondVisualGene) {
+pub fn calculate_diamond_life_gene(
+    dianum: u32,
+    diamhash: &[u8; 32],
+    pedding_block_hash: &Hash,
+    diabidfee: &Amount,
+) -> DiamondLifeGene {
     // cacl vgenehash
     let mut vgenehash = diamhash.clone();
     if dianum > DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BLOCK_HASH {
         let mut vgenestuff = diamhash.to_vec();
-        vgenestuff.append( &mut pedding_block_hash.to_vec() ); // add block hash
+        vgenestuff.append(&mut pedding_block_hash.to_vec()); // add block hash
         if dianum > DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BIDDING_FEE {
-            vgenestuff.append( &mut diabidfee.serialize() ); // add bidfee
+            vgenestuff.append(&mut diabidfee.serialize()); // add bidfee
         }
         vgenehash = x16rs::calculate_hash(vgenestuff);
     }
+    DiamondLifeGene::from(vgenehash.try_into().unwrap())
+}
+
+/**
+ * calculate diamond genes
+ */
+pub fn calculate_diamond_gene(
+    dianum: u32,
+    diamhash: &[u8; 32],
+    diamondstr: &[u8; 16],
+    pedding_block_hash: &Hash,
+    diabidfee: &Amount,
+) -> (DiamondLifeGene, DiamondVisualGene) {
+    let life_gene = calculate_diamond_life_gene(
+        dianum,
+        diamhash,
+        pedding_block_hash,
+        diabidfee,
+    );
     let dianame = diamondstr[10..16].try_into().unwrap();
     // ok ret
     (
-        DiamondLifeGene::from(vgenehash.try_into().unwrap()),
-        calculate_diamond_visual_gene(&dianame, &vgenehash), 
+        life_gene,
+        calculate_diamond_visual_gene(&dianame, &life_gene),
     )
 }
-
 
 /**
  * calculate diamond average bid burn
  */
-pub fn calculate_diamond_average_bid_burn(diamond_number: u32, hacd_burn_238: u128) -> Uint2 {
+pub fn calculate_diamond_average_bid_burn(diamond_number: u32, hacd_burn_238: u128) -> Ret<Uint2> {
     // old
     if diamond_number <= DIAMOND_ABOVE_NUMBER_OF_STATISTICS_AVERAGE_BIDDING_BURNING {
-        return Uint2::from(10)
+        return Ok(Uint2::from(10));
     }
     // average
     let bsnum = diamond_number - DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES;
@@ -105,7 +115,9 @@ pub fn calculate_diamond_average_bid_burn(diamond_number: u32, hacd_burn_238: u1
     let avgbid = hacd_burn_238 / 100_0000_0000 / (bsnum as u128) + 1;
     // The burned amount is economically bounded in business assumptions, so
     // this value is not expected to exceed u16::MAX.
-    assert!(avgbid <= u16::MAX as u128, "average bid burn overflow u16");
+    if avgbid > u16::MAX as u128 {
+        return errf!("average bid burn overflow u16");
+    }
     // ok
-    Uint2::from(avgbid as u16)
+    Ok(Uint2::from(avgbid as u16))
 }

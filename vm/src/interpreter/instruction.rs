@@ -1353,13 +1353,6 @@ mod shift_u64_tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn test_heap() -> Heap {
-        let mut h = Heap::new(64);
-        let gst = GasExtra::new(1);
-        h.grow(1, &gst).unwrap();
-        h
-    }
-
     fn fin_dispatch_for_test(spec: FinSpec, args: &[Value]) -> VmrtRes<Value> {
         match spec.family {
             Bytecode::FIN2 => fin2_checked(spec, &args[0], &args[1]),

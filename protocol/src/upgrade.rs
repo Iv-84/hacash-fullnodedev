@@ -44,7 +44,10 @@ pub fn check_gated_tx(chain_id: u32, height: u64, tx_type: u8) -> Rerr {
     if chain_id != MAINNET_CHAIN_ID {
         return Ok(());
     }
-    if is_online_upgrade_open(height) || is_dev_upgrade_open(height) || is_pre_upgrade_allowed_tx_type(tx_type) {
+    if is_online_upgrade_open(height)
+        || is_dev_upgrade_open(height)
+        || is_pre_upgrade_allowed_tx_type(tx_type)
+    {
         return Ok(());
     }
     errf!(
@@ -60,7 +63,10 @@ pub fn check_gated_action(chain_id: u32, height: u64, kind: u16) -> Rerr {
     if chain_id != MAINNET_CHAIN_ID {
         return Ok(());
     }
-    if is_online_upgrade_open(height) || is_dev_upgrade_open(height) || is_pre_upgrade_allowed_action(kind) {
+    if is_online_upgrade_open(height)
+        || is_dev_upgrade_open(height)
+        || is_pre_upgrade_allowed_action(kind)
+    {
         return Ok(());
     }
     errf!(

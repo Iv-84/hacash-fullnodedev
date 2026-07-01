@@ -62,7 +62,8 @@ fn unpack_seq(
     cap: &SpaceCap,
 ) -> VmrtRes<i64> {
     let start = i as usize;
-    if locals.len() < start + items.len() {
+    let end = start.checked_add(items.len()).ok_or_else(|| ItrErr::code(OutOfStack))?;
+    if locals.len() < end {
         return itr_err_code!(OutOfStack);
     }
     let mut gas = 0i64;

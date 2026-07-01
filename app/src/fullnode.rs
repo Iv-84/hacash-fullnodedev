@@ -2,8 +2,6 @@ use std::path::*;
 use std::sync::*;
 use std::thread::{JoinHandle, spawn};
 
-use super::*;
-
 use basis::config::*;
 use basis::interface::*;
 use sys::*;
@@ -114,7 +112,7 @@ impl FullnodeBuilder {
 
     pub fn from_ini(cnfini: IniObj) -> Self {
         let datdir = get_mainnet_data_dir(&cnfini);
-        let engcnf = Arc::new(EngineConf::new(&cnfini, HACASH_STATE_DB_UPDT));
+        let engcnf = Arc::new(EngineConf::new(&cnfini));
         let nodcnf = Arc::new(NodeConf::new(&cnfini));
         Self {
             exiter: Exiter::new(),

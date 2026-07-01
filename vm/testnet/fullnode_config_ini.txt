@@ -20,6 +20,7 @@ can_delete = true
 enable = true
 listen = 8088
 diamond_form = true
+debug_open = false
 
 
 [miner]

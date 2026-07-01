@@ -110,9 +110,15 @@ impl Display for Address {
     }
 }
 
-pub static ADDRESS_ZERO: Address = Address(Fixed21::from([0u8; 21]));
-pub static ADDRESS_ONEX: Address = Address(Fixed21::from([0u8, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]));
-pub static ADDRESS_TWOX: Address = Address(Fixed21::from([0u8, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]));
+// System addresses: 21-byte big-endian value < u32::MAX.
+// These addresses are computationally unknowable (nobody holds the private key).
+pub static ADDRESS_ZERO: Address = Address(Fixed21::from([0u8; 21])); // value = 0, blackhole
+pub static ADDRESS_ONEX: Address = Address(Fixed21::from([
+    0u8, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 1u8,
+])); // value = 1, TEX settlement
+pub static ADDRESS_TWOX: Address = Address(Fixed21::from([
+    0u8, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 2u8,
+])); // value = 2, reserved
 
 
 macro_rules! address_version_define {
@@ -152,8 +158,10 @@ impl Address {
     }}
     concat_idents::concat_idents!{ creat_by_version = create_, $name {
     pub fn creat_by_version(hx: [u8; 20]) -> Self {
-        let data = vec![vec![Self::$key], hx.to_vec()].concat();
-        Self::from(<Vec<u8> as TryInto<[u8; 21]>>::try_into(data).unwrap())
+        let mut data = [0u8; 21];
+        data[0] = Self::$key;
+        data[1..].copy_from_slice(&hx);
+        Self::from(data)
     }
     }}
     )+
@@ -193,6 +201,23 @@ impl Address {
 
     pub const fn zero() -> Self {
         Self::UNKNOWN
+    }
+
+    /// Returns true if this address is a system address whose 21-byte
+    /// big-endian value is less than `u32::MAX`.  These addresses are
+    /// computationally unknowable — nobody holds the corresponding
+    /// private key because RIPEMD160 preimage collision probability
+    /// for any value below 2³² is ≈ 2⁻¹²⁸.
+    ///
+    /// System addresses include:
+    ///   - ADDRESS_ZERO  (value 0)  — blackhole
+    ///   - ADDRESS_ONEX  (value 1)  — TEX settlement escrow
+    ///   - ADDRESS_TWOX  (value 2)  — reserved
+    pub fn is_privakey_unknown(&self) -> bool {
+        let b = self.as_ref(); // 21 bytes
+        // Value < u32::MAX  →  top 17 bytes must be 0.
+        b[..17].iter().all(|&x| x == 0)
+            && u32::from_be_bytes([b[17], b[18], b[19], b[20]]) < u32::MAX
     }
 
     pub fn to_readable(&self) -> String {

@@ -80,7 +80,7 @@ impl Stack {
 
     pub fn alloc(&mut self, num: u8) -> VmrtRes<u8> {
         let osz = self.datas.len();
-        let tsz = osz + num as usize;
+        let tsz = osz.checked_add(num as usize).ok_or_else(|| ItrErr::code(OutOfStack))?;
         if tsz > self.limit {
             return itr_err_code!(OutOfStack);
         }
@@ -100,6 +100,32 @@ impl Stack {
         let v = self.peek()?;
         let sz = v.val_size();
         Ok((v, sz))
+    }
+
+    /// `from_top == 0` is stack top. Returns `None` when out of range.
+    #[inline(always)]
+    pub fn tail(&self, from_top: usize) -> Option<&Value> {
+        let l = self.datas.len();
+        (from_top < l).then(|| &self.datas[l - 1 - from_top])
+    }
+
+    /// `val_size()` of the stack value `from_top` slots below the top.
+    #[inline(always)]
+    pub fn tail_val_size(&self, from_top: usize) -> VmrtRes<usize> {
+        self.tail(from_top)
+            .map(Value::val_size)
+            .ok_or_else(|| ItrErr::code(OutOfStack))
+    }
+
+    /// Sum `val_size()` of the top `n` values.
+    #[inline(always)]
+    pub fn tail_val_size_sum(&self, n: usize) -> VmrtRes<usize> {
+        let l = self.datas.len();
+        if n > l {
+            itr_err_code!(OutOfStack)
+        } else {
+            Ok(self.datas[l - n..].iter().map(|v| v.val_size()).sum())
+        }
     }
 
     pub fn compo<'a>(&'a mut self) -> VmrtRes<&'a mut CompoItem> {
@@ -284,6 +310,23 @@ impl Stack {
 #[cfg(test)]
 mod stack_join_tests {
     use super::*;
+
+    #[test]
+    fn tail_val_size_reads_from_stack_top() {
+        let mut stack = Stack::new(4);
+        assert_eq!(stack.tail_val_size(0).unwrap_err().0, OutOfStack);
+        assert_eq!(stack.tail_val_size(1).unwrap_err().0, OutOfStack);
+
+        stack.push(Value::Bytes(vec![1u8; 10])).unwrap();
+        assert_eq!(stack.tail_val_size(0).unwrap(), 10);
+        assert_eq!(stack.tail_val_size(1).unwrap_err().0, OutOfStack);
+
+        stack.push(Value::U16(3)).unwrap();
+        assert_eq!(stack.tail_val_size(0).unwrap(), 2);
+        assert_eq!(stack.tail_val_size(1).unwrap(), 10);
+        assert_eq!(stack.tail_val_size_sum(2).unwrap(), 12);
+        assert_eq!(stack.tail_val_size_sum(3).unwrap_err().0, OutOfStack);
+    }
 
     #[test]
     fn join_rejects_oversize_before_popping_items() {

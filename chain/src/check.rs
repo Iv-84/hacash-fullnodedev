@@ -1,5 +1,11 @@
 
-fn try_execute_tx_by(this: &ChainEngine, tx: &dyn TransactionRead, pd_hei: u64, sub_state: &mut Box<dyn State>) -> Rerr {
+fn try_execute_tx_by_author(
+    this: &ChainEngine,
+    tx: &dyn TransactionRead,
+    pd_hei: u64,
+    sub_state: &mut Box<dyn State>,
+    author: Address,
+) -> Rerr {
     let cnf = &this.cnf;
     if protocol::transaction::is_prelude_tx_type(tx.ty()) {
         return errf!("cannot submit author tx");
@@ -28,7 +34,7 @@ fn try_execute_tx_by(this: &ChainEngine, tx: &dyn TransactionRead, pd_hei: u64, 
         block: BlkInfo {
             height: pd_hei,
             hash,
-            author: cnf.external_exec_author(),
+            author,
         },
         tx: create_tx_info(tx),
     };

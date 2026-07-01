@@ -24,6 +24,12 @@ fn tex_check_settlement_addr_privakey() -> Rerr {
             SETTLEMENT_ADDR
         );
     }
+    if !SETTLEMENT_ADDR.is_privakey_unknown() {
+        return errf!(
+            "tex settlement address {} must be a system address (value < u32::MAX)",
+            SETTLEMENT_ADDR
+        );
+    }
     Ok(())
 }
 

@@ -157,16 +157,16 @@ fn load_diamond_owner_for_inscription_index(
 }
 
 #[inline]
-fn add_diamond_engraved_count(state: &mut CoreState, add_num: usize) -> Rerr {
-    if add_num == 0 {
+fn add_dia_insc_u8(
+    state: &mut CoreState,
+    field: fn(&mut TotalCount) -> &mut Uint8,
+    add: u64,
+    name: &str,
+) -> Rerr {
+    if add == 0 {
         return Ok(());
     }
-    let mut ttcount = state.get_total_count();
-    let engraved_total = (*ttcount.diamond_engraved)
-        .checked_add(add_num as u64)
-        .ok_or_else(|| "diamond_engraved overflow".to_string())?;
-    ttcount.diamond_engraved = Uint8::from(engraved_total);
-    state.set_total_count(&ttcount);
+    with_total_count(state, |ttcount| total_add_u8(field(ttcount), add, name))?;
     Ok(())
 }
 
@@ -175,21 +175,34 @@ fn add_diamond_insc_burn_count(state: &mut CoreState, pfee: &Amount) -> Rerr {
     if !pfee.is_positive() {
         return Ok(());
     }
-    let mut ttcount = state.get_total_count();
-    let pfee_238 = pfee.to_238_u64()?;
-    let burn_total = (*ttcount.diamond_insc_burn_238)
-        .checked_add(pfee_238 as u128)
-        .ok_or_else(|| "diamond_insc_burn_238 overflow".to_string())?;
-    ttcount.diamond_insc_burn_238 = Uint12::from(burn_total);
-    state.set_total_count(&ttcount);
+    with_total_count(state, |ttcount| {
+        total_add_amount_238(
+            &mut ttcount.diamond_insc_burn_238,
+            pfee,
+            "diamond_insc_burn_238",
+        )
+    })?;
+    Ok(())
+}
+
+#[inline]
+fn saturating_sub_dia_insc_live_diamond(state: &mut CoreState, sub: u64) -> Rerr {
+    if sub == 0 {
+        return Ok(());
+    }
+    with_total_count(state, |ttcount| {
+        let cur = ttcount.dia_insc_live_diamond.uint();
+        let next = cur.saturating_sub(sub);
+        ttcount.dia_insc_live_diamond =
+            Uint8::from_checked(next).ok_or_else(|| "dia_insc_live_diamond overflow".to_string())?;
+        Ok(())
+    })?;
     Ok(())
 }
 
 /// Reject non-canonical `protocol_cost` wire on new tx paths (API / mempool).
 /// Historical block replay still uses permissive [`WireAmount`] parse.
-pub fn reject_tx_dia_insc_push_non_canonical_protocol_cost_wire(
-    tx: &dyn TransactionRead,
-) -> Rerr {
+pub fn reject_tx_dia_insc_push_non_canonical_protocol_cost_wire(tx: &dyn TransactionRead) -> Rerr {
     for act in tx.actions() {
         if let Some(a) = DiaInscPush::downcast(act) {
             a.protocol_cost.require_canonical_wire().map_err(|e| {
@@ -243,10 +256,12 @@ fn diamond_inscription(this: &DiaInscPush, ctx: &mut dyn Context) -> XRet<Vec<u8
     check_inscription_content(*this.engraved_type, &this.engraved_content)?;
     // cost
     let mut ttcost = Amount::zero();
+    let mut live_diamond_add = 0u64;
     let pdhei = env.block.height;
     // do
     let mut state = CoreState::wrap(ctx.state());
     for dia in this.diamonds.as_list() {
+        let prev_len = load_diamond_for_inscription(&mut state, &dia)?.inscripts.length();
         let cc = engraved_one_diamond(
             pdhei,
             &mut state,
@@ -256,6 +271,9 @@ fn diamond_inscription(this: &DiaInscPush, ctx: &mut dyn Context) -> XRet<Vec<u8
             &this.engraved_content,
         )?;
         ttcost = ttcost.add_mode_u64(&cc)?;
+        if prev_len == 0 {
+            live_diamond_add += 1;
+        }
     }
     // check cost
     if pfee < &ttcost {
@@ -266,8 +284,20 @@ fn diamond_inscription(this: &DiaInscPush, ctx: &mut dyn Context) -> XRet<Vec<u8
         );
     }
     // change count
-    add_diamond_engraved_count(&mut state, this.diamonds.length())?;
+    add_dia_insc_u8(&mut state, |t| &mut t.diamond_engraved, 1, "diamond_engraved")?;
+    add_dia_insc_u8(
+        &mut state,
+        |t| &mut t.dia_insc_push,
+        this.diamonds.length() as u64,
+        "dia_insc_push",
+    )?;
     add_diamond_insc_burn_count(&mut state, pfee)?;
+    add_dia_insc_u8(
+        &mut state,
+        |t| &mut t.dia_insc_live_diamond,
+        live_diamond_add,
+        "dia_insc_live_diamond",
+    )?;
     // sub main addr balance
     if pfee.is_positive() {
         hac_sub(ctx, &main_addr, pfee)?;
@@ -308,13 +338,20 @@ fn diamond_inscription_clean(this: &DiaInscClean, ctx: &mut dyn Context) -> XRet
     ctx.check_sign(&main_addr)?;
     // cost
     let mut ttcost = Amount::zero();
+    let mut cleared_entries = 0u64;
+    let mut cleared_diamonds = 0u64;
     let pdhei = env.block.height;
     // do
     let mut state = CoreState::wrap(ctx.state());
     for dia in this.diamonds.as_list() {
+        let prev_len = load_diamond_for_inscription(&mut state, &dia)?.inscripts.length();
         // Clear semantics: full wipe of inscription traces, including cooldown trace.
         let cc = engraved_clean_one_diamond(pdhei, &mut state, &main_addr, &dia)?;
         ttcost = ttcost.add_mode_u64(&cc)?;
+        cleared_entries += prev_len as u64;
+        if prev_len > 0 {
+            cleared_diamonds += 1;
+        }
     }
     // check cost
     if pfee < &ttcost {
@@ -326,6 +363,9 @@ fn diamond_inscription_clean(this: &DiaInscClean, ctx: &mut dyn Context) -> XRet
     }
     // change count and sub hac
     add_diamond_insc_burn_count(&mut state, pfee)?;
+    add_dia_insc_u8(&mut state, |t| &mut t.dia_insc_clean, 1, "dia_insc_clean")?;
+    add_dia_insc_u8(&mut state, |t| &mut t.dia_insc_drop, cleared_entries, "dia_insc_drop")?;
+    saturating_sub_dia_insc_live_diamond(&mut state, cleared_diamonds)?;
     if pfee.is_positive() {
         hac_sub(ctx, &main_addr, pfee)?;
     }
@@ -401,6 +441,7 @@ fn diamond_inscription_edit(this: &DiaInscEdit, ctx: &mut dyn Context) -> XRet<V
     state.diamond_set(&this.diamond, &diasto);
     // burn protocol cost
     add_diamond_insc_burn_count(&mut state, pfee)?;
+    add_dia_insc_u8(&mut state, |t| &mut t.dia_insc_edit, 1, "dia_insc_edit")?;
     if pfee.is_positive() {
         hac_sub(ctx, &main_addr, pfee)?;
     }
@@ -444,7 +485,7 @@ fn diamond_inscription_move(this: &DiaInscMove, ctx: &mut dyn Context) -> XRet<V
         return xerrf!("source and target HACD cannot be the same");
     }
     // validate source and target diamonds
-    let (mut from_sto, mut to_sto, from_owner, to_owner, move_cost) = {
+    let (mut from_sto, mut to_sto, from_owner, to_owner, move_cost, from_len, to_len) = {
         let mut state = CoreState::wrap(ctx.state());
         let from_sto = load_diamond_for_inscription(&mut state, &this.from_diamond)?;
         let from_owner = from_sto.address.clone();
@@ -461,12 +502,12 @@ fn diamond_inscription_move(this: &DiaInscMove, ctx: &mut dyn Context) -> XRet<V
                 INSCRIPTION_MAX_PER_DIAMOND
             );
         }
+        let to_insc_len = to_sto.inscripts.length();
         let move_cost = {
-            let to_len = to_sto.inscripts.length();
             let avg_bid_burn_mei = load_diamond_average_bid_burn_mei(&mut state, &this.to_diamond)?;
-            calc_move_inscription_protocol_cost(to_len, avg_bid_burn_mei)
+            calc_move_inscription_protocol_cost(to_insc_len, avg_bid_burn_mei)
         };
-        (from_sto, to_sto, from_owner, to_owner, move_cost)
+        (from_sto, to_sto, from_owner, to_owner, move_cost, from_insc_len, to_insc_len)
     };
     // both owners must sign
     ctx.check_sign(&from_owner)?;
@@ -491,6 +532,13 @@ fn diamond_inscription_move(this: &DiaInscMove, ctx: &mut dyn Context) -> XRet<V
     state.diamond_set(&this.to_diamond, &to_sto);
     // burn protocol cost
     add_diamond_insc_burn_count(&mut state, pfee)?;
+    add_dia_insc_u8(&mut state, |t| &mut t.dia_insc_move, 1, "dia_insc_move")?;
+    if from_len == 1 {
+        saturating_sub_dia_insc_live_diamond(&mut state, 1)?;
+    }
+    if to_len == 0 {
+        add_dia_insc_u8(&mut state, |t| &mut t.dia_insc_live_diamond, 1, "dia_insc_live_diamond")?;
+    }
     if pfee.is_positive() {
         hac_sub(ctx, &main_addr, pfee)?;
     }
@@ -535,6 +583,7 @@ fn diamond_inscription_drop(this: &DiaInscDrop, ctx: &mut dyn Context) -> XRet<V
     let mut state = CoreState::wrap(ctx.state());
     // cost: average_bid_burn / 50
     let avg_bid_burn_mei = load_diamond_average_bid_burn_mei(&mut state, &this.diamond)?;
+    let prev_len = diasto.inscripts.length();
     let cost = calc_drop_inscription_protocol_cost(avg_bid_burn_mei);
     if pfee < &cost {
         return xerrf!(
@@ -549,6 +598,10 @@ fn diamond_inscription_drop(this: &DiaInscDrop, ctx: &mut dyn Context) -> XRet<V
     state.diamond_set(&this.diamond, &diasto);
     // burn fee
     add_diamond_insc_burn_count(&mut state, pfee)?;
+    add_dia_insc_u8(&mut state, |t| &mut t.dia_insc_drop, 1, "dia_insc_drop")?;
+    if prev_len == 1 {
+        saturating_sub_dia_insc_live_diamond(&mut state, 1)?;
+    }
     if pfee.is_positive() {
         hac_sub(ctx, &main_addr, pfee)?;
     }

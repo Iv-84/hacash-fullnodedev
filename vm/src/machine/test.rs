@@ -375,7 +375,7 @@ mod machine_file_test {
             ext_state,
             owner_script,
         );
-        assert_err_contains(res, "defer not allowed in current abst call");
+        assert_err_contains(res, "defer can only be registered from Permit*/Payable* abst entries");
     }
 
     #[test]
@@ -1444,7 +1444,7 @@ mod machine_file_test {
             )
             .expect_err("Append must not be able to register defer");
         assert!(
-            append_err.contains("defer not allowed in current abst call"),
+            append_err.contains("defer can only be registered from Permit*/Payable* abst entries"),
             "unexpected error: {append_err}"
         );
         assert!(runtime.volatile.deferred_registry.drain_lifo().is_empty());
@@ -1480,7 +1480,7 @@ mod machine_file_test {
             )
             .expect_err("Deferred must not be able to register another defer");
         assert!(
-            deferred_err.contains("defer not allowed in current abst call"),
+            deferred_err.contains("defer can only be registered from Permit*/Payable* abst entries"),
             "unexpected error: {deferred_err}"
         );
         assert!(runtime.volatile.deferred_registry.drain_lifo().is_empty());

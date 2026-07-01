@@ -22,7 +22,9 @@ impl Logs for BlockLogs {
 
     fn remove(&self, height: u64) {
         let hei = Uint8::from(height);
-        let lnk = [hei.serialize(), b"n".to_vec()].concat();
+        let mut lnk = Vec::with_capacity(hei.size() + 1);
+        hei.serialize_to(&mut lnk);
+        lnk.push(b'n');
         let num = self.read_len(&lnk);
         let mut batch = MemKV::new();
         for i in 0..num {
@@ -68,13 +70,19 @@ impl Logs for BlockLogs {
 impl BlockLogs {
     fn lnk(&self) -> Vec<u8> {
         let hei = Uint8::from(self.bhei);
-        [hei.serialize(), b"n".to_vec()].concat()
+        let mut out = Vec::with_capacity(hei.size() + 1);
+        hei.serialize_to(&mut out);
+        out.push(b'n');
+        out
     }
 
     fn wnk(hei: u64, idx: usize) -> Vec<u8> {
         let hei = Uint8::from(hei);
         let num = Uint8::from(idx as u64);
-        [hei.serialize(), num.serialize()].concat()
+        let mut out = Vec::with_capacity(hei.size() + num.size());
+        hei.serialize_to(&mut out);
+        num.serialize_to(&mut out);
+        out
     }
 
     fn nk(&self, n: usize) -> Vec<u8> {

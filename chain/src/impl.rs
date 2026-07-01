@@ -98,7 +98,17 @@ impl EngineRead for ChainEngine {
     }
 
     fn try_execute_tx_by(&self, tx: &dyn TransactionRead, pd_hei: u64, sub_state: &mut Box<dyn State>) -> Rerr {
-        try_execute_tx_by(self, tx, pd_hei, sub_state)
+        self.try_execute_tx_by_author(tx, pd_hei, sub_state, self.cnf.external_exec_author())
+    }
+
+    fn try_execute_tx_by_author(
+        &self,
+        tx: &dyn TransactionRead,
+        pd_hei: u64,
+        sub_state: &mut Box<dyn State>,
+        author: Address,
+    ) -> Rerr {
+        try_execute_tx_by_author(self, tx, pd_hei, sub_state, author)
     }
 
     fn average_fee_purity(&self) -> u64 {

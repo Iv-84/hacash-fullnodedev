@@ -28,7 +28,9 @@ impl TexCellAct {
     fn get_sign_stuff(&self) -> Hash {
         // Intentionally sign only addr+cells.
         // TEX bundles are designed to be replayable across transactions.
-        let stf = vec![self.addr.serialize(), self.cells.serialize()].concat();
+        let mut stf = Vec::with_capacity(self.addr.size() + self.cells.size());
+        self.addr.serialize_to(&mut stf);
+        self.cells.serialize_to(&mut stf);
         Hash::from(sha3(&stf))
     }
 

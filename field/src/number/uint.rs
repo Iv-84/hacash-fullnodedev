@@ -1,21 +1,18 @@
-
-
 macro_rules! uint_define {
     ($class:ident, $size:expr, $numlen:expr, $vty:ty ) => {
-
-        concat_idents!{ uint_zero = ZERO_, $class {
+        concat_idents! { uint_zero = ZERO_, $class {
         #[allow(non_upper_case_globals)]
         static uint_zero: OnceLock<$class> = OnceLock::new();
         }}
-                
+
         #[derive(Default, Debug, Hash, Copy, Clone, PartialEq, Eq)]
         pub struct $class {
             value: $vty,
         }
 
         impl Display for $class {
-            fn fmt(&self,f: &mut std::fmt::Formatter) -> std::fmt::Result{
-                write!(f,"{}", self.value)
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.value)
             }
         }
 
@@ -32,11 +29,9 @@ macro_rules! uint_define {
             }
         }
 
-        
-        ord_impl!{$class, value}
-        compute_impl_checked!{$class, value, $vty}
-        from_uint_all!{$class, value, $vty}
-
+        ord_impl! {$class, value}
+        compute_impl_checked! {$class, value, $vty}
+        from_uint_all! {$class, value, $vty}
 
         impl Parse for $class {
             fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
@@ -46,7 +41,12 @@ macro_rules! uint_define {
                 full[start..].copy_from_slice(bts);
                 self.value = <$vty>::from_be_bytes(full);
                 if self.value > Self::MAX {
-                    return errf!("{} parse value {} exceeds max {}", stringify!($class), self.value, Self::MAX)
+                    return errf!(
+                        "{} parse value {} exceeds max {}",
+                        stringify!($class),
+                        self.value,
+                        Self::MAX
+                    );
                 }
                 Ok($size)
             }
@@ -65,7 +65,7 @@ macro_rules! uint_define {
             }
         }
 
-        impl_field_only_new!{$class}
+        impl_field_only_new! {$class}
 
         impl ToJSON for $class {
             fn to_json_fmt(&self, _fmt: &JSONFormater) -> String {
@@ -78,7 +78,12 @@ macro_rules! uint_define {
                 let s = json_expect_unquoted(json)?;
                 if let Ok(v) = s.parse::<$vty>() {
                     if v > Self::MAX {
-                        return errf!("{} value {} exceeds max {}", stringify!($class), v, Self::MAX)
+                        return errf!(
+                            "{} value {} exceeds max {}",
+                            stringify!($class),
+                            v,
+                            Self::MAX
+                        );
                     }
                     self.value = v;
                     return Ok(());
@@ -88,15 +93,15 @@ macro_rules! uint_define {
         }
 
         impl $class {
-
-            pub const MAX: $vty = maybe!($size == $numlen,
+            pub const MAX: $vty = maybe!(
+                $size == $numlen,
                 <$vty>::MAX,
                 ((1u128 << ($size * 8)) - 1) as $vty
             );
             pub const SIZE: usize = $size as usize;
 
             pub fn zero_ref() -> &'static Self {
-                concat_idents!{ uint_zero = ZERO_, $class {
+                concat_idents! { uint_zero = ZERO_, $class {
                 uint_zero.get_or_init(||Self::from(0))
                 }}
             }
@@ -105,15 +110,27 @@ macro_rules! uint_define {
                 if v > Self::MAX {
                     panic!(concat!(stringify!($class), " overflow: value exceeds MAX"))
                 }
-                Self{ value: v }
+                Self { value: v }
+            }
+
+            pub fn from_checked(v: $vty) -> Option<Self> {
+                if v > Self::MAX {
+                    return None;
+                }
+                Some(Self { value: v })
             }
 
             pub fn from_usize(v: usize) -> Ret<Self> {
                 // Use u128 comparison to avoid truncation on 32-bit platforms
                 if (v as u128) > (Self::MAX as u128) {
-                    return errf!("{} value {} exceeds max {}", stringify!($class), v, Self::MAX)
+                    return errf!(
+                        "{} value {} exceeds max {}",
+                        stringify!($class),
+                        v,
+                        Self::MAX
+                    );
                 }
-                Ok(Self{value: v as $vty})
+                Ok(Self { value: v as $vty })
             }
 
             pub fn uint(&self) -> $vty {
@@ -122,11 +139,11 @@ macro_rules! uint_define {
 
             pub fn to_uint(&self) -> $vty {
                 self.value
-            }   
+            }
 
             pub fn as_uint(&self) -> &$vty {
                 &self.value
-            }   
+            }
 
             pub fn to_vec(&self) -> Vec<u8> {
                 self.to_bytes().into()
@@ -138,41 +155,42 @@ macro_rules! uint_define {
                 }
                 let mut real = [0u8; $size];
                 let bts = <$vty>::to_be_bytes(self.value);
-                for x in 1 ..= $size {
-                    real[$size-x] = bts[$numlen-x];
+                for x in 1..=$size {
+                    real[$size - x] = bts[$numlen - x];
                 }
                 // println!("Uint to_bytes size {} bts {} real {}", $size, hex::encode(bts), hex::encode(real));
                 real
             }
-            
+
             pub fn checked(self) -> Ret<Self> {
                 if self.value > Self::MAX {
-                    return errf!("{} value {} exceeds max {}", stringify!($class), self.value, Self::MAX)
+                    return errf!(
+                        "{} value {} exceeds max {}",
+                        stringify!($class),
+                        self.value,
+                        Self::MAX
+                    );
                 }
                 Ok(self)
             }
-
         }
-
-
     };
 }
-
 
 /*
 * define
 */
-uint_define!{Uint1, 1, 1, u8}
-uint_define!{Uint2, 2, 2, u16}
-uint_define!{Uint3, 3, 4, u32}
-uint_define!{Uint4, 4, 4, u32}
-uint_define!{Uint5, 5, 8, u64}
-uint_define!{Uint6, 6, 8, u64}
-uint_define!{Uint7, 7, 8, u64}
-uint_define!{Uint8, 8, 8, u64}
-uint_define!{Uint10, 10, 16, u128}
-uint_define!{Uint12, 12, 16, u128}
-uint_define!{Uint16, 16, 16, u128}
+uint_define! {Uint1, 1, 1, u8}
+uint_define! {Uint2, 2, 2, u16}
+uint_define! {Uint3, 3, 4, u32}
+uint_define! {Uint4, 4, 4, u32}
+uint_define! {Uint5, 5, 8, u64}
+uint_define! {Uint6, 6, 8, u64}
+uint_define! {Uint7, 7, 8, u64}
+uint_define! {Uint8, 8, 8, u64}
+uint_define! {Uint10, 10, 16, u128}
+uint_define! {Uint12, 12, 16, u128}
+uint_define! {Uint16, 16, 16, u128}
 
 impl ParsePrefix for Uint1 {
     fn create_with_prefix(prefix: &[u8], _rest: &[u8]) -> Ret<(Self, usize)> {
@@ -184,31 +202,23 @@ impl ParsePrefix for Uint1 {
     }
 }
 
-
 /************************ test ************************/
-
-
-
-
 
 #[cfg(test)]
 mod uint_tests {
     use super::*;
 
-
     macro_rules! uint_test_one {
-        ($ty: ty, $v: expr) => { {
+        ($ty: ty, $v: expr) => {{
             let u1 = <$ty>::from($v);
             let mut u1f = <$ty>::from(0);
             let _ = u1f.parse(&u1.serialize());
             assert_eq!(u1, u1f);
-        } }
+        }};
     }
-
 
     #[test]
     fn test2() {
-        
         uint_test_one!(Uint1, 0);
         uint_test_one!(Uint1, 1);
         uint_test_one!(Uint1, 2);
@@ -226,54 +236,53 @@ mod uint_tests {
         uint_test_one!(Uint2, 65534);
         uint_test_one!(Uint2, 65535);
 
-        let m3: u32 = 256*256*256 - 1;
+        let m3: u32 = 256 * 256 * 256 - 1;
         uint_test_one!(Uint3, 0);
         uint_test_one!(Uint3, 1);
         uint_test_one!(Uint3, 1000);
-        uint_test_one!(Uint3, m3-2);
-        uint_test_one!(Uint3, m3-1);
+        uint_test_one!(Uint3, m3 - 2);
+        uint_test_one!(Uint3, m3 - 1);
         uint_test_one!(Uint3, m3);
 
         let m4: u32 = u32::MAX;
         uint_test_one!(Uint4, 0);
         uint_test_one!(Uint4, 1);
         uint_test_one!(Uint4, 74563000);
-        uint_test_one!(Uint4, m4-2);
-        uint_test_one!(Uint4, m4-1);
+        uint_test_one!(Uint4, m4 - 2);
+        uint_test_one!(Uint4, m4 - 1);
         uint_test_one!(Uint4, m4);
 
-        let m5: u64 = 256*256*256*256*256 - 1;
+        let m5: u64 = 256 * 256 * 256 * 256 * 256 - 1;
         uint_test_one!(Uint5, 0);
         uint_test_one!(Uint5, 1);
         uint_test_one!(Uint5, 740345600);
-        uint_test_one!(Uint5, m5-2);
-        uint_test_one!(Uint5, m5-1);
+        uint_test_one!(Uint5, m5 - 2);
+        uint_test_one!(Uint5, m5 - 1);
         uint_test_one!(Uint5, m5);
 
-        let m6: u64 = 256*256*256*256*256*256 - 1;
+        let m6: u64 = 256 * 256 * 256 * 256 * 256 * 256 - 1;
         uint_test_one!(Uint6, 0);
         uint_test_one!(Uint6, 1);
         uint_test_one!(Uint6, 7404534566600);
-        uint_test_one!(Uint6, m6-2);
-        uint_test_one!(Uint6, m6-1);
+        uint_test_one!(Uint6, m6 - 2);
+        uint_test_one!(Uint6, m6 - 1);
         uint_test_one!(Uint6, m6);
 
-        let m7: u64 = 256*256*256*256*256*256*256 - 1;
+        let m7: u64 = 256 * 256 * 256 * 256 * 256 * 256 * 256 - 1;
         uint_test_one!(Uint7, 0);
         uint_test_one!(Uint7, 1);
         uint_test_one!(Uint7, 7434505674564500);
-        uint_test_one!(Uint7, m7-2);
-        uint_test_one!(Uint7, m7-1);
+        uint_test_one!(Uint7, m7 - 2);
+        uint_test_one!(Uint7, m7 - 1);
         uint_test_one!(Uint7, m7);
 
         let m8: u64 = u64::MAX;
         uint_test_one!(Uint8, 0);
         uint_test_one!(Uint8, 1);
         uint_test_one!(Uint8, 7408487745635624600);
-        uint_test_one!(Uint8, m8-2);
-        uint_test_one!(Uint8, m8-1);
+        uint_test_one!(Uint8, m8 - 2);
+        uint_test_one!(Uint8, m8 - 1);
         uint_test_one!(Uint8, m8);
-
     }
 
     #[test]
@@ -477,5 +486,4 @@ mod uint_tests {
             assert_eq!(p.uint(), b);
         }
     }
-
 }

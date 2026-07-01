@@ -34,13 +34,11 @@ macro_rules! action_define {
         }
 
         impl Serialize for $class {
-            fn serialize(&self) -> Vec<u8> {
-                vec![
-                    self.kind.serialize(),
-                    $(
-                        self.$item.serialize()
-                    ),*
-                ].concat()
+            fn serialize_to(&self, out: &mut Vec<u8>) {
+                self.kind.serialize_to(out);
+                $(
+                    self.$item.serialize_to(out);
+                )*
             }
             fn size(&self) -> usize {
                 [

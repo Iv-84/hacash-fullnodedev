@@ -86,7 +86,7 @@ pub enum Bytecode {
     LDROP = 0x4e,  // *&     drop buf left *
     RDROP = 0x4f,  // *&     drop buf right *
     SIZE = 0x50,   // &      size (u16)
-    CHOOSE = 0x51, // no,yes,cond+ cond?yes:no (IR reversed order)
+    CHOOSE = 0x51, // cond,yes,no+ cond?yes:no (stack bottom->top; matches IR child order subx=cond, suby=yes, subz=no)
     ____________52 = 0x52,
     ____________53 = 0x53,
     ____________54 = 0x54,
@@ -519,8 +519,8 @@ bytecode_metadata_define! {
     IRIF       : 0, 3, 0,     ir_if
     IRIFR      : 0, 3, 1,     ir_if_expr
     IRWHILE    : 0, 2, 0,     ir_while
-    IRBREAK    : 0, 0, 0,     ir_break
-    IRCONTINUE : 0, 0, 0,     ir_continue
+    IRBREAK    : 0, 0, 0,     ir_break      // patch-list lowered; never appears in runtime bytecode
+    IRCONTINUE : 0, 0, 0,     ir_continue   // patch-list lowered; never appears in runtime bytecode
 
     BURN       : 2, 0, 0,     gas_burn
     NOP        : 0, 0, 0,     nop

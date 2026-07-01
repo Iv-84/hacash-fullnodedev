@@ -93,8 +93,9 @@ macro_rules! transaction_define_legacy {
                 if txsz == 0 {
                     return 0;
                 }
-                let fee238 = self.fee_got().to_238_u64().unwrap_or(0);
-                fee238 / txsz
+                let fee238 = self.fee_got().to_238_u128().unwrap_or(u128::MAX);
+                let purity = fee238 / txsz as u128;
+                purity.min(u64::MAX as u128) as u64
             }
         }
 
@@ -149,14 +150,18 @@ macro_rules! transaction_define_legacy {
             }
 
             fn hash_ex(&self, adfe: Vec<u8>) -> Hash {
-                let stuff = vec![
-                    self.ty.serialize(),
-                    self.timestamp.serialize(),
-                    self.addrlist.serialize(),
-                    adfe,
-                    self.actions.serialize(),
-                ]
-                .concat();
+                let mut stuff = Vec::with_capacity(
+                    self.ty.size()
+                        + self.timestamp.size()
+                        + self.addrlist.size()
+                        + adfe.len()
+                        + self.actions.size(),
+                );
+                self.ty.serialize_to(&mut stuff);
+                self.timestamp.serialize_to(&mut stuff);
+                self.addrlist.serialize_to(&mut stuff);
+                stuff.extend_from_slice(&adfe);
+                self.actions.serialize_to(&mut stuff);
                 let hx = sys::calculate_hash(stuff);
                 Hash::must(&hx[..])
             }
@@ -245,6 +250,12 @@ fn prepare_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Ret<TxExec
         if !main.is_privakey() {
             return errf!("tx fee address version must be PRIVAKEY type.");
         }
+        if main.is_privakey_unknown() {
+            return errf!(
+                "tx main address {} is a system address with unknown private key",
+                main
+            );
+        }
         for adr in tx.addrs() {
             adr.check_version()?;
         }
@@ -284,23 +295,17 @@ fn mark_tx_exist(ctx: &mut dyn Context, hx: &Hash, blkhei: u64) {
 
 // Legacy Type1/Type2 extra9 burned-fee accounting. This records the fee delta
 // created by `fee_got()` and is not part of Type3 returned-gas surcharge semantics.
-fn record_legacy_extra9_burn_fee(
-    ctx: &mut dyn Context,
-    fee: &Amount,
-    fee_got: &Amount,
-) -> Rerr {
+fn record_legacy_extra9_burn_fee(ctx: &mut dyn Context, fee: &Amount, fee_got: &Amount) -> Rerr {
     let burn_fee = fee.sub_mode_u128(fee_got)?;
     if burn_fee.is_positive() {
-        let burn_238 = burn_fee.to_238_u64()?;
-        if burn_238 > 0 {
-            let mut state = CoreState::wrap(ctx.state());
-            let mut ttcount = state.get_total_count();
-            let next_burn = (*ttcount.tx_fee_burn90_238)
-                .checked_add(burn_238 as u128)
-                .ok_or_else(|| "legacy_tx_extra9_burn_238 overflow".to_string())?;
-            ttcount.tx_fee_burn90_238 = Uint12::from(next_burn);
-            state.set_total_count(&ttcount);
-        }
+        let mut state = CoreState::wrap(ctx.state());
+        crate::operate::with_total_count(&mut state, |ttcount| {
+            crate::operate::total_add_amount_238(
+                &mut ttcount.tx_fee_burn90_238,
+                &burn_fee,
+                "legacy_tx_extra9_burn_238",
+            )
+        })?;
     }
     Ok(())
 }
@@ -325,6 +330,10 @@ fn do_tx_execute_legacy<T: Transaction + LegacyTransactionRead>(
         return errf!("tx type {} ano_mark must be zero", prep.txty);
     }
     mark_tx_exist(ctx, &prep.hx, prep.blkhei);
+    {
+        let mut state = CoreState::wrap(ctx.state());
+        crate::operate::total_add_tx_fee_pay(&mut state, tx)?;
+    }
     for action in tx.actions() {
         ctx.exec_from_set(ExecFrom::Top);
         // Legacy top-level execution ignores returned gas. Legacy extra9 fee semantics
@@ -333,6 +342,8 @@ fn do_tx_execute_legacy<T: Transaction + LegacyTransactionRead>(
     }
     super::tex::do_settlement(ctx)?;
     operate::hac_sub(ctx, &prep.main, &prep.fee)?;
+    // Safety: clear leaked HAC/SAT/Asset on SETTLEMENT_ADDR after all balance operations.
+    crate::tex::settlement_addr_postsettle_cleanup(ctx);
     let fee_got = tx.fee_got();
     record_legacy_extra9_burn_fee(ctx, &prep.fee, &fee_got)?;
     Ok(())

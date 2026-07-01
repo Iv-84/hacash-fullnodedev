@@ -72,10 +72,10 @@ impl Contract {
         const SAFETY_DEN: u128 = 100;
         let fee238 = txfee.to_238_u128().unwrap_or(0);
         let tx_size_est = TX_SIZE_ESTIMATE_BASE_BYTES.saturating_add(payload_bytes as u128);
-        let mut fee_purity = fee238 / tx_size_est.max(1);
-        if fee_purity < CONTRACT_STORE_LOWEST_FEE_PURITY as u128 {
-            fee_purity = CONTRACT_STORE_LOWEST_FEE_PURITY as u128;
-        }
+        let fee_purity = protocol::params::vm_effective_fee_purity(
+            0,
+            (fee238 / tx_size_est.max(1)).min(u64::MAX as u128) as u64,
+        ) as u128;
         let need = fee_purity
             .saturating_mul(charged_bytes as u128)
             .saturating_mul(periods as u128);
@@ -93,7 +93,12 @@ impl Contract {
         act.contract = self.ctrt.clone();
         act.construct_argv = self.argv.clone();
         let bytes = act.contract.size();
-        act.protocol_cost = Self::estimate_protocol_cost(&txfee, bytes, bytes, CONTRACT_STORE_PERM_PERIODS);
+        act.protocol_cost = Self::estimate_protocol_cost(
+            &txfee,
+            bytes,
+            bytes,
+            protocol::params::CONTRACT_STORE_PERM_PERIODS,
+        );
         // print
         curl_trs_2(vec![Box::new(act)], fee);
     }
@@ -109,7 +114,12 @@ impl Contract {
         act.address = cadr;
         // On-chain update fee only charges edited-bytes with perm periods.
         let bytes = act.edit.size();
-        act.protocol_cost = Self::estimate_protocol_cost(&txfee, bytes, bytes, CONTRACT_STORE_PERM_PERIODS);
+        act.protocol_cost = Self::estimate_protocol_cost(
+            &txfee,
+            bytes,
+            bytes,
+            protocol::params::CONTRACT_STORE_PERM_PERIODS,
+        );
         // print
         curl_trs_2(vec![Box::new(act)], fee);
     }

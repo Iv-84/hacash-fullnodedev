@@ -101,7 +101,11 @@ impl Heap {
         }
         let oldseg = self.datas.len() / Self::SEGLEN;
         let gas = gas_extra.heap_grow_gas(oldseg, seg, self.limit)?;
-        let newsz = self.datas.len() + seg * Self::SEGLEN;
+        let newsz = self
+            .datas
+            .len()
+            .checked_add(seg * Self::SEGLEN)
+            .ok_or_else(|| ItrErr::new(HeapError, "heap size overflow"))?;
         self.datas.resize(newsz, 0u8);
         Ok(gas)
     }

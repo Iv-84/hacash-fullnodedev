@@ -48,6 +48,7 @@ pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &A
         from,
         to,
     )?;
+    check_transfer_recipient_allowed(to)?;
     // is to self
     if from == to {
         if !from.is_privakey() {
@@ -68,9 +69,7 @@ pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &A
     // do trs
     check_amount_is_positive!(amt);
     do_hac_sub(ctx, from, amt)?;
-    do_hac_add(ctx, to,   amt)?;
-    let state = &mut CoreState::wrap(ctx.state());
-    blackhole_engulf(state, to);
+    hac_add(ctx, to, amt)?; // hac_add includes blackhole_engulf
     Ok(vec![])
 }
 
@@ -93,6 +92,10 @@ pub fn hac_check(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> XRet<Am
 pub fn hac_add(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> XRet<Vec<u8>> {
     check_amount_is_positive!(amt);
     do_hac_add(ctx, addr, amt)?;
+    let state = &mut CoreState::wrap(ctx.state());
+    if blackhole_engulf(state, addr) {
+        total_record_blackhole_hac(state, amt)?;
+    }
     Ok(vec![])
 }
 

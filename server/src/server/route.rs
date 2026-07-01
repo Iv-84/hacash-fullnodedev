@@ -29,6 +29,7 @@ pub fn router(
     hnoder: Arc<dyn HNoder>,
     mut rts: Vec<Router<ApiCtx>>,
     services: Vec<Arc<dyn ApiService>>,
+    debug_open: bool,
 ) -> Router {
 
     let ctx = ApiCtx::new(hnoder.engine(), hnoder.clone());
@@ -36,7 +37,7 @@ pub fn router(
     let mut rtr = Router::new()
         .route("/_server_", get("Hacash Api Server"))
         .merge(nrt);
-    rtr = merge_registered_services(rtr, services);
+    rtr = merge_registered_services(rtr, services, debug_open);
     while let Some(r) = rts.pop() {
         rtr = rtr.merge(r);
     }

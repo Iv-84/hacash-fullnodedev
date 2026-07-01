@@ -299,7 +299,7 @@ fn extract_p2sh_witness(param: &Value) -> Ret<Vec<u8>> {
     }
 }
 
-pub fn run_p2sh_entry(
+pub(crate) fn run_p2sh_entry(
     ctx: &mut dyn Context,
     codeconf: u8,
     payload: Vec<u8>,

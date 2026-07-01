@@ -14,8 +14,8 @@
 */
 
 
-// Indicates that the compiler version used is 0.1.0
-use pragma 0.1.0
+// Indicates that the compiler version used is 1.0.0
+pragma fitsh 1.0.0
 
 
 /*
@@ -30,9 +30,9 @@ contract TestToken {
     const MIN_DEPOSIT = 1
 
     deploy {
-        protocol_cost: "1:248",
+        protocol_cost: amount("1:248"),
         nonce: 1,
-        construct_argv: "0xaabb2244" // or "construct argv string"
+        construct_argv: 0xaabb2244 // or "construct argv string"
     }
     
 

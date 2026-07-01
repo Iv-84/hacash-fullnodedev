@@ -31,7 +31,9 @@ impl ContractAddress {
 
     // https://en.bitcoin.it/wiki/List_of_address_prefixes
 	pub fn calculate(addr: &Address, nonce: &Uint4) -> Self {
-		let dts = vec![addr.serialize(), nonce.serialize()].concat();
+		let mut dts = Vec::with_capacity(addr.size() + nonce.size());
+		addr.serialize_to(&mut dts);
+		nonce.serialize_to(&mut dts);
 		let hx32 = sha3(dts);
 		let hx20 = ripemd160(hx32);
         let addr = Address::create_contract(hx20);

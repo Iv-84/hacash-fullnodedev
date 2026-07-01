@@ -1,121 +1,131 @@
 use super::compile_body::{CompiledCode, compile_body};
 use super::parse_deploy::parse_deploy;
-use super::parse_func::{parse_func_body_tokens, parse_func_sig, parse_function};
-use super::state::ParseState;
+use super::parse_func::{
+    parse_func_body_tokens, parse_func_sig, parse_function, parse_optional_code_modifier,
+};
+use super::state::{FITSH_CURRENT_VERSION, FitshVersion, ParseState};
 use crate::contract::Abst;
-use crate::rt::Token::{self, *};
+use crate::rt::Token::*;
 use crate::rt::{AbstCall, KwTy, calc_func_sign};
 use crate::value::ValueTy;
 use sys::*;
 use sys::{Ret, errf};
 
 pub fn parse_top_level(state: &mut ParseState) -> Ret<()> {
-    // optional pragma: `use pragma 0.1.0` or `pragma 0.1.0`
-    let mut saw_use = false;
-    if let Some(Keyword(KwTy::Use)) = state.current() {
-        saw_use = true;
-        state.advance();
-    }
-    let is_pragma = matches!(state.current(), Some(Keyword(KwTy::Pragma)))
-        || matches!(state.current(), Some(Identifier(p)) if p == "pragma");
-    if is_pragma {
-        state.advance();
-        // consume version tokens like 0.1.0 or v0.1.0
-        loop {
-            match state.current() {
-                Some(Integer(_)) | Some(Identifier(_)) | Some(Keyword(KwTy::Dot)) => {
-                    state.advance()
-                }
-                _ => break,
-            }
-        }
-    } else if saw_use {
-        return errf!("expected pragma after 'use'");
-    }
-
+    parse_required_pragma(state)?;
     state.skip_soft_separators();
 
-    // contract Name {
-    if let Some(Keyword(KwTy::Contract)) = state.current() {
-        state.advance();
-        if let Some(Identifier(name)) = state.current() {
-            state.contract_name = name.clone();
-            state.advance();
-        }
-        state.eat_partition('{')?;
+    if !matches!(state.current(), Some(Keyword(KwTy::Contract))) {
+        return errf!("expected contract declaration after pragma");
+    }
+    state.advance();
+    let Some(Identifier(name)) = state.current() else {
+        return errf!("expected contract name after 'contract'");
+    };
+    state.contract_name = name.clone();
+    state.advance();
+    state.eat_partition('{')?;
 
-        loop {
-            state.skip_soft_separators();
-            if let Some(Partition('}')) = state.current() {
-                state.advance();
-                break;
-            }
-            parse_contract_body_item(state)?;
+    loop {
+        state.skip_soft_separators();
+        if let Some(Partition('}')) = state.current() {
+            state.advance();
+            break;
         }
-    } else {
-        // Fallback for files without contract wrapper
-        while state.idx < state.max {
-            state.skip_soft_separators();
-            if state.idx >= state.max {
-                break;
-            }
-            parse_contract_body_item(state)?;
-        }
+        parse_contract_body_item(state)?;
     }
 
     Ok(())
 }
 
-/// Represents a parsed top-level constant value
-#[derive(Debug, Clone)]
-pub enum ConstValue {
-    /// Unsigned integer constant stored as u128
-    Uint(u128),
-    /// Boolean: true or false
-    Bool(bool),
-    /// Bytes: hex string (0x...) or binary (0b...)
-    Bytes(Vec<u8>),
-    /// Address:Hacash address
-    Address(field::Address),
-    /// String literal
-    String(Vec<u8>),
+fn parse_required_pragma(state: &mut ParseState) -> Rerr {
+    if !matches!(state.current(), Some(Keyword(KwTy::Pragma))) {
+        return errf!(
+            "expected 'pragma fitsh {}' at file start",
+            FITSH_CURRENT_VERSION
+        );
+    }
+    state.advance();
+
+    match state.current() {
+        Some(Identifier(id)) if id == "fitsh" => state.advance(),
+        _ => return errf!("expected 'fitsh' after pragma"),
+    }
+
+    let version = parse_semver(state)?;
+    check_pragma_version(state, version)?;
+    state.version = Some(version);
+    Ok(())
 }
 
-fn parse_const_value(state: &mut ParseState) -> Ret<ConstValue> {
+fn parse_u16_component(state: &mut ParseState, label: &str) -> Ret<u16> {
+    let Some(Integer(n)) = state.current() else {
+        return errf!("expected {} version number", label);
+    };
+    let n = u16::try_from(*n).map_err(|_| format!("{} version number overflow", label))?;
+    state.advance();
+    Ok(n)
+}
+
+fn parse_version_dot(state: &mut ParseState) -> Rerr {
+    match state.current() {
+        Some(Keyword(KwTy::Dot)) => {
+            state.advance();
+            Ok(())
+        }
+        _ => errf!("expected '.' in fitsh version"),
+    }
+}
+
+fn parse_semver(state: &mut ParseState) -> Ret<FitshVersion> {
+    let major = parse_u16_component(state, "major")?;
+    parse_version_dot(state)?;
+    let minor = parse_u16_component(state, "minor")?;
+    parse_version_dot(state)?;
+    let patch = parse_u16_component(state, "patch")?;
+    Ok(FitshVersion::new(major, minor, patch))
+}
+
+fn check_pragma_version(state: &mut ParseState, version: FitshVersion) -> Rerr {
+    let current = FITSH_CURRENT_VERSION;
+    if version.major != current.major {
+        return errf!(
+            "unsupported fitsh major version {}; compiler supports {}",
+            version,
+            current
+        );
+    }
+    if version.minor > current.minor {
+        return errf!(
+            "fitsh source version {} requires newer compatible features; compiler supports {}",
+            version,
+            current
+        );
+    }
+    if version.patch != current.patch {
+        state.warnings.push(format!(
+            "fitsh patch version {} differs from compiler {}; only equivalent optimization/formatting changes are expected",
+            version,
+            current
+        ));
+    }
+    Ok(())
+}
+
+fn parse_optional_const_type(state: &mut ParseState) -> Ret<Option<ValueTy>> {
+    if !matches!(state.current(), Some(Keyword(KwTy::Colon))) {
+        return Ok(None);
+    }
+    state.advance();
     let token = state
         .current()
         .cloned()
-        .ok_or_else(|| format!("Expected const value but got EOF"))?;
+        .ok_or_else(|| "expected const type after ':'".to_string())?;
+    let Some(ty) = crate::lang::parse_const_value_ty(&token) else {
+        return errf!("const type invalid");
+    };
     state.advance();
-
-    match token {
-        Token::Integer(n) => Ok(ConstValue::Uint(n)),
-        Token::Bytes(b) => Ok(ConstValue::Bytes(b)),
-        Token::Address(addr) => Ok(ConstValue::Address(addr)),
-        Token::Identifier(s) => {
-            match s.as_str() {
-                "true" => Ok(ConstValue::Bool(true)),
-                "false" => Ok(ConstValue::Bool(false)),
-                _ => {
-                    // Try to parse as hex bytes
-                    if s.starts_with("0x") {
-                        let v = s[2..].to_string();
-                        match hex::decode(v) {
-                            Ok(d) => return Ok(ConstValue::Bytes(d)),
-                            Err(_) => return errf!("invalid hex bytes: {}", s),
-                        }
-                    }
-                    errf!("invalid const value: {}", s)
-                }
-            }
-        }
-        Token::Keyword(kw) => match kw {
-            KwTy::True => Ok(ConstValue::Bool(true)),
-            KwTy::False => Ok(ConstValue::Bool(false)),
-            _ => errf!("invalid const value keyword: {:?}", kw),
-        },
-        _ => errf!("expected const value but got {:?}", token),
-    }
+    Ok(Some(ty))
 }
 
 fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
@@ -130,6 +140,7 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
                 return errf!("expected const name after 'const'");
             };
             state.advance();
+            let explicit_ty = parse_optional_const_type(state)?;
 
             // Expect '='
             if let Some(Keyword(KwTy::Assign)) = state.current() {
@@ -139,23 +150,22 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
             }
 
             // Parse the const value
-            let value = parse_const_value(state)?;
-
-            // Convert to string representation for storage
-            let value_str = match &value {
-                ConstValue::Uint(n) => format!("uint:{}", n),
-                ConstValue::Bool(b) => format!("bool:{}", b),
-                ConstValue::Bytes(b) => format!("bytes:0x{}", hex::encode(b)),
-                ConstValue::Address(a) => format!("address:{}", a.to_readable()),
-                ConstValue::String(s) => format!("string:{}", String::from_utf8_lossy(s)),
-            };
+            let token = state
+                .current()
+                .cloned()
+                .ok_or_else(|| "expected const value but got EOF".to_string())?;
+            state.advance();
+            let literal = crate::lang::parse_const_literal(token, explicit_ty)?;
 
             if state.consts.iter().any(|(n, _)| n == &name) {
                 return errf!("duplicate const '{}'", name);
             }
-            state.consts.push((name, value_str));
+            state.consts.push((name, literal.node));
         }
         Some(Keyword(KwTy::Deploy)) => {
+            if state.deploy.is_some() {
+                return errf!("duplicate deploy block");
+            }
             let info = parse_deploy(state)?;
             state.deploy = Some(info);
         }
@@ -190,20 +200,7 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
         Some(Keyword(KwTy::Abstract)) => {
             state.advance(); // consume abstract
 
-            // Check for ircode/bytecode modifier
-            let mut is_ircode = false;
-            while let Some(tk) = state.current() {
-                match tk {
-                    Keyword(KwTy::IrCode) => {
-                        is_ircode = true;
-                        state.advance();
-                    }
-                    Keyword(KwTy::ByteCode) => {
-                        state.advance();
-                    }
-                    _ => break,
-                }
-            }
+            let is_ircode = parse_optional_code_modifier(state, "abstract")?;
 
             let (name, args, ret_ty) = parse_func_sig(state)?;
             // return type must be integer error code if declared

@@ -25,7 +25,7 @@ These are fixed compute gas units from `GasTable::new`. Opcode bytes not listed 
 
 ## Gas limits
 
-- max_gas_of_tx: 8192 (= 65536 / 8). This is the current hard cap for per-tx gas.
+- max_gas_of_tx: 111911 (= decode_gas_budget(99), from `TX_GAS_BUDGET_CAP_BYTE = 99` in `protocol/src/context/gas.rs:47`). This is the current hard cap for per-tx gas.
 - call_base_main: 48. Compute surcharge added on top of measured Main-entry work.
 - call_base_p2sh: 64. Compute surcharge added on top of measured P2SH-entry work.
 - call_base_abst: 80. Compute surcharge added on top of measured abstract/hook-entry work.
@@ -41,7 +41,7 @@ Per-entry billing formula:
 `TransactionType3.gas_max` is a 1-byte lookup key. Runtime decodes it with `decode_gas_budget()` and applies the chain cap clamp before `gas_init_tx` (see `protocol/src/context/gas.rs`; VM mirror constants are in `vm/src/rt/gas.rs`).
 
 - `gas_max=0`: no VM gas budget. Any contract/p2sh call fails to initialize gas.
-- `gas_max>0`: decoded budget is read from `GAS_BUDGET_LOOKUP_1P07_FROM_138` and then clamped by `max_gas_of_tx`.
+- `gas_max>0`: decoded budget is read from `GAS_BUDGET_LOOKUP_1P07_FROM_138` and then clamped by the chain cap byte (`gas_max_byte.min(TX_GAS_BUDGET_CAP_BYTE)`, where `TX_GAS_BUDGET_CAP_BYTE = 99` → max budget `111911`).
 - `b=0`: gas is `0`.
 - `b in 1..=255`: `gas = GAS_BUDGET_LOOKUP_1P07_FROM_138[b]`.
 - Table generation rule: `table[i] = floor(138 * 1.07^i)`, `i in 0..=255`.

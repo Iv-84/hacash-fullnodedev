@@ -544,6 +544,47 @@ fn build_fin_ir_func(
     build_param1_multi_node(hrtv, inst, fin_id, argvs).map_err(|e| e.to_string())
 }
 
+pub(super) fn build_log_irnode(
+    inst: Bytecode,
+    argvs: Vec<Box<dyn IRNode>>,
+) -> Ret<Box<dyn IRNode>> {
+    let mut argvs = std::collections::VecDeque::from(argvs);
+    let take = |argvs: &mut std::collections::VecDeque<Box<dyn IRNode>>| argvs.pop_front().unwrap();
+    Ok(match inst {
+        Bytecode::LOG1 => Box::new(IRNodeDouble {
+            hrtv: false,
+            inst,
+            subx: take(&mut argvs),
+            suby: take(&mut argvs),
+        }),
+        Bytecode::LOG2 => Box::new(IRNodeTriple {
+            hrtv: false,
+            inst,
+            subx: take(&mut argvs),
+            suby: take(&mut argvs),
+            subz: take(&mut argvs),
+        }),
+        Bytecode::LOG3 => Box::new(IRNodeQuad {
+            hrtv: false,
+            inst,
+            subx: take(&mut argvs),
+            suby: take(&mut argvs),
+            subz: take(&mut argvs),
+            subw: take(&mut argvs),
+        }),
+        Bytecode::LOG4 => Box::new(IRNodeQuint {
+            hrtv: false,
+            inst,
+            suba: take(&mut argvs),
+            subb: take(&mut argvs),
+            subc: take(&mut argvs),
+            subd: take(&mut argvs),
+            sube: take(&mut argvs),
+        }),
+        _ => return errf!("log opcode invalid"),
+    })
+}
+
 fn build_ir_func(
     inst: Bytecode,
     pms: usize,

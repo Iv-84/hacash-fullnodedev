@@ -374,6 +374,11 @@ mod fitsh_compile_tests {
             log_brace: "log{1, 2, 3}",
             codecall_simple: "codecall ext(0).0xabcdef01",
         );
+
+        assert_roundtrip!(
+            rt_log_then_return: "log(\"topic\", 1)\nreturn 0",
+            rt_log_then_throw: "log(\"topic\", 1)\nthrow 7",
+        );
     }
 
     // ========================================================================= 10. TYPE SYSTEM =========================================================================
@@ -544,7 +549,6 @@ mod fitsh_compile_tests {
             call_pure_use_keyword: "return call pure use(1).0x01020304(1)",
               codecall_keyword: "codecall 0.0xabcdef01",
         );
-
 
         assert_compile_err_contains!(
             dead_code_after_return: "return 1
@@ -921,27 +925,58 @@ return C.0xabcdef01(1, 2)",
                     Ok(())
                 }
 
-                fn sget(&mut self, gst: &GasExtra, cap: &SpaceCap, addr: &Address, key: &Value) -> VmrtRes<Value> {
+                fn sget(
+                    &mut self,
+                    gst: &GasExtra,
+                    cap: &SpaceCap,
+                    addr: &Address,
+                    key: &Value,
+                ) -> VmrtRes<Value> {
                     let _ = (gst, cap, addr, key);
                     Err(ItrErr::code(ItrErrCode::StorageError))
                 }
 
-                fn sput(&mut self, gst: &GasExtra, cap: &SpaceCap, addr: &Address, key: Value, val: Value) -> VmrtRes<()> {
+                fn sput(
+                    &mut self,
+                    gst: &GasExtra,
+                    cap: &SpaceCap,
+                    addr: &Address,
+                    key: Value,
+                    val: Value,
+                ) -> VmrtRes<()> {
                     let _ = (gst, cap, addr, key, val);
                     Err(ItrErr::code(ItrErrCode::StorageError))
                 }
 
-                fn sstat(&mut self, gst: &GasExtra, cap: &SpaceCap, addr: &Address, key: &Value) -> VmrtRes<Value> {
+                fn sstat(
+                    &mut self,
+                    gst: &GasExtra,
+                    cap: &SpaceCap,
+                    addr: &Address,
+                    key: &Value,
+                ) -> VmrtRes<Value> {
                     let _ = (gst, cap, addr, key);
                     Err(ItrErr::code(ItrErrCode::StorageError))
                 }
 
-                fn sload(&mut self, gst: &GasExtra, cap: &SpaceCap, addr: &Address, key: &Value) -> VmrtRes<Value> {
+                fn sload(
+                    &mut self,
+                    gst: &GasExtra,
+                    cap: &SpaceCap,
+                    addr: &Address,
+                    key: &Value,
+                ) -> VmrtRes<Value> {
                     let _ = (gst, cap, addr, key);
                     Err(ItrErr::code(ItrErrCode::StorageError))
                 }
 
-                fn sdel(&mut self, gst: &GasExtra, cap: &SpaceCap, addr: &Address, key: Value) -> VmrtRes<i64> {
+                fn sdel(
+                    &mut self,
+                    gst: &GasExtra,
+                    cap: &SpaceCap,
+                    addr: &Address,
+                    key: Value,
+                ) -> VmrtRes<i64> {
                     let _ = (gst, cap, addr, key);
                     Err(ItrErr::code(ItrErrCode::StorageError))
                 }

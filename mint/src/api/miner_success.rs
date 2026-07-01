@@ -63,7 +63,7 @@ fn miner_success(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
     
     block.replace_transaction(0, Box::new(coinbase_tx)).unwrap();
     let blkpkg = BlkPkg::create(Box::new(block));
-    if let Err(e) = ctx.hnoder.submit_block(&blkpkg, true) {
+    if let Err(e) = ctx.hnoder.submit_block(&blkpkg, false) {
         return api_error(&format!("submit block failed: {}", e));
     }
 

@@ -60,6 +60,12 @@ pub fn check_tx_signature(tx: &dyn TransactionRead) -> Ret<HashMap<Address, bool
 
 
 pub fn verify_target_signature(adr: &Address, tx: &dyn TransactionRead) -> Ret<bool> {
+    if adr.is_privakey_unknown() {
+        return errf!(
+            "address {} is a system address (value < u32::MAX) with unknown private key, cannot sign",
+            adr
+        );
+    }
     let hx = tx.hash();
     let hxwf = tx.hash_with_fee();
     let signs = tx.signs();
@@ -74,6 +80,12 @@ pub fn verify_target_signature(adr: &Address, tx: &dyn TransactionRead) -> Ret<b
 
 
 pub fn verify_one_sign(hash: &Hash, addr: &Address, signs: &Vec<Sign>) -> Ret<bool> {
+    if addr.is_privakey_unknown() {
+        return errf!(
+            "address {} is a system address (value < u32::MAX) with unknown private key, cannot sign",
+            addr
+        );
+    }
     for sig in signs {
         if basis::method::verify_signature(hash, addr, sig) {
             return Ok(true)

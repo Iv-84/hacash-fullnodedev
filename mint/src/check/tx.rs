@@ -50,10 +50,21 @@ fn impl_tx_pool_refresh(
 fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, blkhei: u64) {
     let pdhei = blkhei + 1;
     let mut sub_state = eng.fork_sub_state();
+    let mut keep_rest_after_uncertain_type3 = false;
     let _ = txpool.retain_at(TXGID_NORMAL, &mut |a: &TxPkg| {
+        if keep_rest_after_uncertain_type3 {
+            return true;
+        }
         let txr = a.tx_read();
         let exec = eng.try_execute_tx_by(txr, pdhei, &mut sub_state);
-        exec.is_ok() // keep or delete
+        if exec.is_ok() {
+            return true;
+        }
+        if txr.ty() >= TransactionType3::TYPE {
+            keep_rest_after_uncertain_type3 = true;
+            return true;
+        }
+        false // delete legacy txs that still fail under deterministic precheck
     });
 }
 

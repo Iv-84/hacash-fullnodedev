@@ -35,8 +35,11 @@ action_define! { AssetCreate, 16,
         }
         // check meta
         amd.issuer.check_version()?;
-        if amd.issuer == BLACKHOLE_ADDR {
-            return xerr!("issuer cannot be blackhole address")
+        if amd.issuer.is_privakey_unknown() {
+            return xerrf!(
+                "issuer cannot be system address {} (privakey unknown)",
+                amd.issuer
+            )
         }
         let tl = amd.ticket.length();
         let nl = amd.name.length();
@@ -74,17 +77,15 @@ action_define! { AssetCreate, 16,
         }
         sta.asset_set(&amd.serial, &amd); // store asset object
         // total count update
-        let mut ttcount = sta.get_total_count();
-        let new_created_asset = ttcount.created_asset.uint()
-            .checked_add(1)
-            .ok_or("created_asset overflow".to_string())?;
-        ttcount.created_asset = Uint8::from(new_created_asset);
-        let pfee_238 = pfee.to_238_u64()?;
-        let new_asset_issue_burn_238 = (*ttcount.asset_issue_burn_238)
-            .checked_add(pfee_238 as u128)
-            .ok_or("asset_issue_burn_238 overflow".to_string())?;
-        ttcount.asset_issue_burn_238 = Uint12::from(new_asset_issue_burn_238);
-        sta.set_total_count(&ttcount);
+        with_total_count(&mut sta, |ttcount| {
+            total_add_u8(&mut ttcount.created_asset, 1, "created_asset")?;
+            total_add_amount_238(
+                &mut ttcount.asset_issue_burn_238,
+                &pfee,
+                "asset_issue_burn_238",
+            )?;
+            Ok(())
+        })?;
         // do mint
         let asset_obj = AssetAmt::from(amd.serial.uint(), amd.supply.uint())?;
         // issue

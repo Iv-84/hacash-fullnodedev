@@ -20,6 +20,7 @@ include!("common.rs");
 include!("core_action.rs");
 include!("submit_transaction.rs");
 include!("submit_block.rs");
+include!("debug.rs");
 include!("fee.rs");
 include!("routes.rs");
 include!("latest.rs");

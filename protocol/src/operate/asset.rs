@@ -25,10 +25,21 @@ macro_rules! asset_operate_define {
 
 /**************************** */
 
-asset_operate_define!(asset_add, addr, asset, oldasset, {
-    // do add
-    oldasset.checked_add(asset)?
-});
+pub fn asset_add(state: &mut CoreState, addr: &Address, asset: &AssetAmt) -> XRet<AssetAmt> {
+    if *asset.amount == 0 {
+        return xerrf!("Asset operate amount cannot be zero")
+    }
+    addr.check_version()?;
+    let mut userbls = state.balance(addr).unwrap_or_default();
+    let oldasset = &userbls.asset_must(asset.serial);
+    let newast = oldasset.checked_add(asset)?;
+    userbls.asset_set(newast.clone())?;
+    state.balance_set(addr, &userbls);
+    if blackhole_engulf(state, addr) {
+        total_record_blackhole_asset(state)?;
+    }
+    Ok(newast)
+}
 
 asset_operate_define!(asset_sub, addr, asset, oldasset, {  
     // check
@@ -53,14 +64,14 @@ pub fn asset_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, asset
         from,
         to,
     )?;
+    check_transfer_recipient_allowed(to)?;
     if from == to {
 		return xerrf!("cannot transfer to self")
     }
     // do transfer
     let state = &mut CoreState::wrap(ctx.state());
     asset_sub(state, from, asset)?;
-    asset_add(state, to,   asset)?;
-    blackhole_engulf(state, to);
+    asset_add(state, to,   asset)?; // asset_add includes blackhole_engulf
     // ok
     Ok(vec![])
 }

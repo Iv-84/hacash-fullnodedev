@@ -112,8 +112,6 @@ impl<'a> Formater<'a> {
         }
     }
 
-
-
     fn format_special_call_target(
         &self,
         code: Bytecode,
@@ -173,7 +171,6 @@ impl<'a> Formater<'a> {
             _ => return None,
         })
     }
-
 
     fn line_prefix(&self) -> String {
         self.opt.indent.repeat(self.opt.tab)
@@ -362,7 +359,11 @@ impl<'a> Formater<'a> {
             .join(", ")
     }
 
-    fn extract_right_assoc_cat_args(&self, node: &dyn IRNode, expect: usize) -> Option<Vec<String>> {
+    fn extract_right_assoc_cat_args(
+        &self,
+        node: &dyn IRNode,
+        expect: usize,
+    ) -> Option<Vec<String>> {
         use Bytecode::*;
         if expect <= 1 {
             return None;
@@ -422,7 +423,8 @@ impl<'a> Formater<'a> {
             // argument boundaries and even change call arity.
             if self.opt.flatten_call_list && !system_call {
                 if let Some(list) = current.as_any().downcast_ref::<IRNodeArray>() {
-                    if let Some(elements) = self.extract_packed_call_elements(list.inst, &list.subs) {
+                    if let Some(elements) = self.extract_packed_call_elements(list.inst, &list.subs)
+                    {
                         args.extend(elements);
                         return args;
                     }
@@ -481,6 +483,41 @@ impl<'a> Formater<'a> {
             key,
             value
         ))
+    }
+
+    fn format_log_node(&self, node: &dyn IRNode) -> Option<String> {
+        use Bytecode::*;
+        let code: Bytecode = std_mem_transmute!(node.bytecode());
+        if !matches!(code, LOG1 | LOG2 | LOG3 | LOG4) {
+            return None;
+        }
+        let args: Vec<String> = if let Some(d) = node.as_any().downcast_ref::<IRNodeDouble>() {
+            vec![self.print_inline(&*d.subx), self.print_inline(&*d.suby)]
+        } else if let Some(t) = node.as_any().downcast_ref::<IRNodeTriple>() {
+            vec![
+                self.print_inline(&*t.subx),
+                self.print_inline(&*t.suby),
+                self.print_inline(&*t.subz),
+            ]
+        } else if let Some(q) = node.as_any().downcast_ref::<IRNodeQuad>() {
+            vec![
+                self.print_inline(&*q.subx),
+                self.print_inline(&*q.suby),
+                self.print_inline(&*q.subz),
+                self.print_inline(&*q.subw),
+            ]
+        } else if let Some(q) = node.as_any().downcast_ref::<IRNodeQuint>() {
+            vec![
+                self.print_inline(&*q.suba),
+                self.print_inline(&*q.subb),
+                self.print_inline(&*q.subc),
+                self.print_inline(&*q.subd),
+                self.print_inline(&*q.sube),
+            ]
+        } else {
+            return None;
+        };
+        Some(format!("{}log({})", self.line_prefix(), args.join(", ")))
     }
 
     fn format_array_block(&self, node: &dyn IRNode) -> Option<String> {
@@ -654,8 +691,17 @@ impl<'a> Formater<'a> {
         let pss = node.as_any().downcast_ref::<IRNodeParamsSingle>()?;
         if !matches!(
             code,
-            CODECALL | CALL | CALLEXT | CALLEXTVIEW | CALLUSEVIEW | CALLUSEPURE | CALLTHIS
-                | CALLSELF | CALLSUPER | CALLSELFVIEW | CALLSELFPURE
+            CODECALL
+                | CALL
+                | CALLEXT
+                | CALLEXTVIEW
+                | CALLUSEVIEW
+                | CALLUSEPURE
+                | CALLTHIS
+                | CALLSELF
+                | CALLSUPER
+                | CALLSELFVIEW
+                | CALLSELFPURE
         ) {
             return None;
         }
@@ -672,7 +718,12 @@ impl<'a> Formater<'a> {
             let body = maybe!(
                 args.is_empty(),
                 format!("codecall {}.{}", target, self.format_func_sig(&selector)),
-                format!("codecall {}.{}({})", target, self.format_func_sig(&selector), args)
+                format!(
+                    "codecall {}.{}({})",
+                    target,
+                    self.format_func_sig(&selector),
+                    args
+                )
             );
             return Some(format!("{}{}", pre, body));
         }
@@ -1234,16 +1285,14 @@ impl<'a> Formater<'a> {
             PBUF | PBUFL => {
                 buf.push_str(&self.format_data_bytes(node));
             }
-            CODECALL => {
-                match decode_splice_body(&node.para) {
-                    Ok(CallSpec::Splice { lib, selector }) => buf.push_str(&format!(
-                        "codecall {}.{}",
-                        self.format_lib_chain_ref(lib),
-                        self.format_func_sig(&selector)
-                    )),
-                    _ => buf.push_str(&format!("codecall 0x{}", hex::encode(&node.para))),
-                }
-            }
+            CODECALL => match decode_splice_body(&node.para) {
+                Ok(CallSpec::Splice { lib, selector }) => buf.push_str(&format!(
+                    "codecall {}.{}",
+                    self.format_lib_chain_ref(lib),
+                    self.format_func_sig(&selector)
+                )),
+                _ => buf.push_str(&format!("codecall 0x{}", hex::encode(&node.para))),
+            },
             _ => {
                 buf.push_str(&format!("{}(0x{})", meta.intro, parastr));
             }
@@ -1428,6 +1477,9 @@ impl<'a> Formater<'a> {
         if let Some(line) = self.format_kv_put(node) {
             return line;
         }
+        if let Some(line) = self.format_log_node(node) {
+            return line;
+        }
         if let Some(line) = self.format_array_block(node) {
             return line;
         }
@@ -1590,5 +1642,4 @@ impl<'a> Formater<'a> {
         }
         format!("{} {} {}", subx, op, suby)
     }
-
 }

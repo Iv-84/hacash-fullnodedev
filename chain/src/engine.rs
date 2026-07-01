@@ -25,10 +25,16 @@ impl ChainEngine {
 
     pub fn open(
         dbopfn: FnBuildDB,
-        cnf: Arc<EngineConf>,
+        mut cnf: Arc<EngineConf>,
         minter: Arc<dyn Minter>,
-        scaner: Arc<dyn Scaner>
+        scaner: Arc<dyn Scaner>,
+        db_version: u32,
     ) -> ChainEngine {
+        let state_dir = join_path(
+            PathBuf::from(cnf.data_dir.as_str()).as_path(),
+            &format!("state_v{}", db_version),
+        );
+        Arc::make_mut(&mut cnf).state_data_dir = state_dir;
         let blk_dir = &cnf.block_data_dir;
         let sta_dir = &cnf.state_data_dir;
         let log_dir = &cnf.vmlog_data_dir;

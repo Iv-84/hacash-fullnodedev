@@ -69,14 +69,11 @@ impl EngineConf {
         Address::default()
     }
     
-    pub fn new(ini: &IniObj, dbv: u32) -> EngineConf {
+    pub fn new(ini: &IniObj) -> EngineConf {
         
 
         // datadir
         let data_dir = get_mainnet_data_dir(ini);
-    
-        let mut state_data_dir = join_path(&data_dir, "state");
-        state_data_dir.push(format!("v{}", dbv));
 
         // server sec
         let sec_server = &ini_section(ini, "server");
@@ -95,7 +92,7 @@ impl EngineConf {
             fast_sync: false,
             sync_maxh: 0,
             block_data_dir: join_path(&data_dir, "block"),
-            state_data_dir: state_data_dir,
+            state_data_dir: join_path(&data_dir, "state"),
             vmlog_data_dir: join_path(&data_dir, "vmlog"),
             data_dir: data_dir.to_str().unwrap().to_owned(),
             dev_count_switch: 0,
@@ -201,7 +198,7 @@ mod tests {
     #[test]
     fn external_exec_author_returns_zero_when_miner_disabled() {
         let ini = IniObj::new();
-        let cnf = EngineConf::new(&ini, 1);
+        let cnf = EngineConf::new(&ini);
         assert_eq!(cnf.external_exec_author(), Address::default());
     }
 
@@ -216,7 +213,7 @@ mod tests {
                 ("reward".to_owned(), Some(reward.clone())),
             ]),
         );
-        let cnf = EngineConf::new(&ini, 1);
+        let cnf = EngineConf::new(&ini);
         assert_eq!(
             cnf.external_exec_author(),
             Address::from_readable(&reward).unwrap()

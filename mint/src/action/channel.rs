@@ -111,16 +111,16 @@ fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> XRet<Vec<u8>> {
 
     // update total count
     let mut cstate = CoreState::wrap(ctx.state());
-    let mut ttcount = cstate.get_total_count();
-    let opening = (*ttcount.opening_channel)
-        .checked_add(1)
-        .ok_or_else(|| "opening_channel overflow".to_string())?;
-    ttcount.opening_channel = Uint8::from(opening);
-    let dep = (*ttcount.channel_deposit_238)
-        .checked_add(lock_total_238 as u128)
-        .ok_or_else(|| "channel_deposit_238 overflow".to_string())?;
-    ttcount.channel_deposit_238 = Uint12::from(dep);
-    cstate.set_total_count(&ttcount);
+    with_total_count(&mut cstate, |ttcount| {
+        total_add_u8(&mut ttcount.opening_channel, 1, "opening_channel")?;
+        total_add_u12(
+            &mut ttcount.channel_deposit_238,
+            lock_total_238 as u128,
+            "channel_deposit_238",
+        )?;
+        total_add_u8(&mut ttcount.channel_open_total, 1, "channel_open_total")?;
+        Ok(())
+    })?;
 
     // ok finish
     Ok(vec![])

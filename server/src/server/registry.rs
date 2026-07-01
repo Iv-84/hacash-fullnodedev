@@ -118,14 +118,22 @@ fn build_method_router(route: ApiRoute) -> MethodRouter<ApiCtx> {
     }
 }
 
+fn route_is_enabled(route: &ApiRoute, debug_open: bool) -> bool {
+    !route.debug || debug_open
+}
+
 pub fn merge_registered_services(
     mut rtr: Router<ApiCtx>,
     services: Vec<Arc<dyn ApiService>>,
+    debug_open: bool,
 ) -> Router<ApiCtx> {
     let mut all_services = global_api_services();
     all_services.extend(services);
     for svc in all_services {
         for route in svc.routes() {
+            if !route_is_enabled(&route, debug_open) {
+                continue;
+            }
             let mr = build_method_router(route.clone());
             rtr = rtr.route(route.path.as_str(), mr);
         }
@@ -179,6 +187,23 @@ mod tests {
         Box::pin(async {
             ApiResponse::json("{\"ret\":0,\"kind\":\"async\"}".to_owned())
         })
+    }
+
+    #[test]
+    fn debug_routes_are_prefixed_and_gated() {
+        let normal = ApiRoute::get("/query/ok", sync_handler);
+        let debug = ApiRoute::debug_get("trace/tx", sync_handler);
+        let debug_slash = ApiRoute::debug_post("/submit/raw", sync_handler);
+
+        assert_eq!(debug.path, "/debug/trace/tx");
+        assert_eq!(debug_slash.path, "/debug/submit/raw");
+        assert!(!normal.debug);
+        assert!(debug.debug);
+
+        assert!(route_is_enabled(&normal, false));
+        assert!(route_is_enabled(&normal, true));
+        assert!(!route_is_enabled(&debug, false));
+        assert!(route_is_enabled(&debug, true));
     }
 
     #[test]

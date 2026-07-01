@@ -18,6 +18,7 @@ include! {"ir_literal.rs"}
 pub mod syntax;
 pub use syntax::Syntax;
 
+include! {"const_literal.rs"}
 include! {"tokenizer.rs"}
 include! {"formater.rs"}
 include! {"test.rs"}

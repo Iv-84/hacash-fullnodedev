@@ -51,35 +51,67 @@ fn parse_type(state: &mut ParseState) -> Ret<Option<ValueTy>> {
     Ok(ty)
 }
 
+fn reserved_modifier_name(kw: KwTy) -> Option<&'static str> {
+    match kw {
+        KwTy::Virtual => Some("virtual"),
+        KwTy::Inner => Some("inner"),
+        KwTy::View => Some("view"),
+        KwTy::Pure => Some("pure"),
+        KwTy::Struct => Some("struct"),
+        _ => None,
+    }
+}
+
+fn reject_reserved_modifier(kw: KwTy, context: &str) -> Rerr {
+    if let Some(name) = reserved_modifier_name(kw) {
+        return errf!("reserved {} modifier '{}' is not supported", context, name);
+    }
+    Ok(())
+}
+
+pub(super) fn parse_optional_code_modifier(state: &mut ParseState, context: &str) -> Ret<bool> {
+    let is_ircode = match state.current() {
+        Some(Keyword(KwTy::IrCode)) => {
+            state.advance();
+            true
+        }
+        Some(Keyword(KwTy::ByteCode)) => {
+            state.advance();
+            false
+        }
+        Some(Keyword(kw)) => {
+            reject_reserved_modifier(*kw, context)?;
+            false
+        }
+        _ => false,
+    };
+    match state.current() {
+        Some(Keyword(KwTy::IrCode)) | Some(Keyword(KwTy::ByteCode)) => {
+            errf!("{} code modifier must appear at most once", context)
+        }
+        Some(Keyword(kw)) => {
+            reject_reserved_modifier(*kw, context)?;
+            Ok(is_ircode)
+        }
+        _ => Ok(is_ircode),
+    }
+}
+
 pub fn parse_function(state: &mut ParseState, consume_kw: bool) -> Ret<(Func, SourceMap, String)> {
     // function external/ircode Name(...) -> Ret { ... }
     if consume_kw {
         state.advance(); // function
     }
 
-    let mut is_external = false;
-    let mut is_ircode = false;
-
-    // Modifiers
-    while let Some(tk) = state.current() {
-        match tk {
-            Keyword(KwTy::External) => {
-                is_external = true;
-                state.advance();
-            }
-            Keyword(KwTy::Virtual) => {
-                // Reserved modifier; currently has no semantic effect in codegen.
-                state.advance();
-            }
-            Keyword(KwTy::IrCode) => {
-                is_ircode = true;
-                state.advance();
-            }
-            Keyword(KwTy::ByteCode) => {
-                state.advance();
-            }
-            _ => break,
-        }
+    let is_external = if matches!(state.current(), Some(Keyword(KwTy::External))) {
+        state.advance();
+        true
+    } else {
+        false
+    };
+    let is_ircode = parse_optional_code_modifier(state, "function")?;
+    if matches!(state.current(), Some(Keyword(KwTy::External))) {
+        return errf!("function modifier 'external' must appear before code modifier");
     }
 
     let (name, args, ret_ty) = parse_func_sig(state)?;
@@ -157,6 +189,7 @@ pub fn parse_func_sig(
                 Some(t) => t,
                 None => return errf!("unknown type"),
             };
+            aty.check_func_argv_type()?;
             args.push((arg_name, aty));
 
             // comma

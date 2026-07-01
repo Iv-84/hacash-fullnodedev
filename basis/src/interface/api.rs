@@ -76,6 +76,7 @@ pub struct ApiRoute {
     pub method: ApiMethod,
     pub path: String,
     pub handler: ApiHandler,
+    pub debug: bool,
 }
 
 impl ApiRoute {
@@ -84,6 +85,7 @@ impl ApiRoute {
             method: ApiMethod::Get,
             path: path.to_owned(),
             handler: ApiHandler::Sync(handler),
+            debug: false,
         }
     }
 
@@ -92,6 +94,7 @@ impl ApiRoute {
             method: ApiMethod::Post,
             path: path.to_owned(),
             handler: ApiHandler::Sync(handler),
+            debug: false,
         }
     }
 
@@ -100,8 +103,32 @@ impl ApiRoute {
             method: ApiMethod::Get,
             path: path.to_owned(),
             handler: ApiHandler::Async(handler),
+            debug: false,
         }
     }
+
+    pub fn debug_get(path: &str, handler: ApiHandlerFn) -> Self {
+        Self {
+            method: ApiMethod::Get,
+            path: debug_path(path),
+            handler: ApiHandler::Sync(handler),
+            debug: true,
+        }
+    }
+
+    pub fn debug_post(path: &str, handler: ApiHandlerFn) -> Self {
+        Self {
+            method: ApiMethod::Post,
+            path: debug_path(path),
+            handler: ApiHandler::Sync(handler),
+            debug: true,
+        }
+    }
+}
+
+fn debug_path(path: &str) -> String {
+    let suffix = path.trim_start_matches('/');
+    format!("/debug/{}", suffix)
 }
 
 pub trait ApiService: Send + Sync {

@@ -396,3 +396,46 @@ impl VMState<'_> {
         Ok(refund)
     }
 }
+
+impl VMStateRead<'_> {
+    pub fn debug_storage_get(
+        &self,
+        gst: &GasExtra,
+        cap: &SpaceCap,
+        curhei: u64,
+        cadr: &Address,
+        k: &Value,
+    ) -> VmrtRes<Option<(Value, u64, u64, bool, bool)>> {
+        let sk = VMState::skey(cadr, k, cap.kv_key_size)?;
+        let Some(mut v) = self.ctrtkvdb(&sk) else {
+            return Ok(None);
+        };
+        v.settle(curhei, gst)?;
+        if v.is_absent() {
+            return Ok(None);
+        }
+        let live = v.live_rest_blocks(gst)?;
+        let recover = v.recover_rest_blocks(gst)?;
+        Ok(Some((
+            v.data.clone(),
+            live,
+            recover,
+            v.is_active(),
+            v.is_recoverable(),
+        )))
+    }
+
+    pub fn debug_status_get(&self, cap: &SpaceCap, cadr: &Address, k: &Value) -> VmrtRes<Value> {
+        let caddr = VMState::status_contract_addr(cadr)?;
+        let status = match self.ctrtstatus(&caddr) {
+            Some(sto) => {
+                let status = sto.to_status_map()?;
+                status.validate_key_lengths(VMState::status_key_max(cap), StorageError)?;
+                status
+            }
+            None => StatusMap::default(),
+        };
+        let key = VMState::status_key_bytes(cap, k)?;
+        Ok(status.get(&key))
+    }
+}

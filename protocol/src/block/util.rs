@@ -5,9 +5,12 @@ fn mrkl_merge(list: &Vec<Hash>) -> Vec<Hash> {
     let mut res = vec![];
     let mut x = 0usize;
     loop {
-        let lh = list[x].to_vec();
-        let rh = maybe!(x+1 < num, list[x+1].to_vec(), lh.clone());
-        let hx = sys::calculate_hash(vec![lh, rh].concat());
+        let lh = &list[x];
+        let rh = maybe!(x + 1 < num, &list[x + 1], lh);
+        let mut pair = Vec::with_capacity(lh.size() + rh.size());
+        pair.extend_from_slice(lh.as_ref());
+        pair.extend_from_slice(rh.as_ref());
+        let hx = sys::calculate_hash(pair);
         res.push(Hash::must(&hx));
         x += 2;
         if x >= num {
@@ -81,7 +84,10 @@ pub fn calculate_mrkl_prelude_modify(list: &Vec<Hash>) -> Vec<Hash> {
 pub fn calculate_mrkl_prelude_update(cbhx: Hash, list: &Vec<Hash>) -> Hash {
     let mut reshx = cbhx;
     for h in list {
-        reshx = Hash::from(sys::calculate_hash(vec![reshx.to_vec(), h.to_vec()].concat()));
+        let mut pair = Vec::with_capacity(reshx.size() + h.size());
+        pair.extend_from_slice(reshx.as_ref());
+        pair.extend_from_slice(h.as_ref());
+        reshx = Hash::from(sys::calculate_hash(pair));
     }
     reshx
 }

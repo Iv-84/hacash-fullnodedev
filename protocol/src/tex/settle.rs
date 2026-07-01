@@ -31,3 +31,41 @@ pub fn do_settlement(ctx: &mut dyn Context) -> Rerr {
     }
     Ok(())
 }
+
+/// After all balance mutations for a transaction are committed (fee, refund, actions,
+/// TEX settlement), zero out any residual HAC/SAT/Asset balance left on the TEX
+/// settlement address.
+///
+/// TEX cells use the off-chain `TexLedger` for HAC/SAT/Asset tracking.  The on-chain
+/// balance of `SETTLEMENT_ADDR` is never touched by TEX operations — it can only be
+/// modified by manual user transfers.  Any such leaked balance is permanently
+/// unspendable (nobody holds the private key for system address value 1).  This
+/// function reclaims that dust so it cannot confuse future invariant checks.
+///
+/// Diamond ownership on `SETTLEMENT_ADDR` is NOT cleared here because:
+///   1. Individual `DiamondSto` records are managed by `do_diamonds_transfer`
+///      during settlement and already point away from `SETTLEMENT_ADDR`.
+///   2. The aggregate diamond count in the `Balance` struct is a derived
+///      counter that must remain consistent with `DiamondSto` across rollback.
+pub fn settlement_addr_postsettle_cleanup(ctx: &mut dyn Context) {
+    let state = &mut CoreState::wrap(ctx.state());
+    if let Some(mut bls) = state.balance(&SETTLEMENT_ADDR) {
+        let mut dirty = false;
+        if bls.hacash > Amount::zero() {
+            bls.hacash = Amount::zero();
+            dirty = true;
+        }
+        if bls.satoshi.uint() > 0 {
+            bls.satoshi = SatoshiAuto::default();
+            dirty = true;
+        }
+        if bls.assets.length() > 0 {
+            bls.assets = AssetAmtW1::new();
+            dirty = true;
+        }
+        // DO NOT clear bls.diamond — see doc comment above.
+        if dirty {
+            state.balance_set(&SETTLEMENT_ADDR, &bls);
+        }
+    }
+}

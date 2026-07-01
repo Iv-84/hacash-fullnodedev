@@ -148,7 +148,7 @@ As a result, wrapping an action inside AST changes how its returned gas particip
 
 - Gas budget is initialized only when a `type3+` transaction has non-zero `gas_max`.
 - Gas budget is decoded from the transaction gas byte and capped by the chain cap.
-- Current transaction gas cap is `8192`.
+- Current transaction gas cap is `111911` (= decode_gas_budget(99), from chain constant `TX_GAS_BUDGET_CAP_BYTE`).
 - Max gas charge is pre-collected before execution and unused gas is refunded after transaction settlement.
 
 AST item attempts always consume the fixed try cost, so any AST path that actually attempts children requires initialized transaction gas.

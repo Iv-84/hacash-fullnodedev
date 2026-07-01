@@ -175,26 +175,21 @@ impl Syntax {
         let Token::Identifier(name) = self.cursor.next()? else {
             return errf!("const statement format invalid");
         };
+        let explicit_ty = if self.cursor.eat_keyword(KwTy::Colon) {
+            let ty_token = self.cursor.next()?;
+            let Some(ty) = crate::lang::parse_const_value_ty(&ty_token) else {
+                return errf!("const statement type invalid");
+            };
+            Some(ty)
+        } else {
+            None
+        };
         self.cursor
             .expect_keyword(KwTy::Assign, "const statement format invalid")?;
         let token = self.cursor.next()?;
-        let node: Box<dyn IRNode> = match &token {
-            Token::Integer(n) => push_num(*n),
-            Token::Bytes(bytes) => push_bytes(bytes)?,
-            Token::Address(addr) => push_addr(*addr),
-            _ => return errf!("const statement format invalid"),
-        };
-        let value = match token {
-            Token::Integer(n) => n.to_string(),
-            Token::Bytes(bytes) => match String::from_utf8(bytes.clone()) {
-                Ok(text) => format!("\"{}\"", text.escape_default()),
-                Err(_) => format!("0x{}", hex::encode(bytes)),
-            },
-            Token::Address(addr) => addr.to_readable(),
-            _ => unreachable!(),
-        };
-        self.register_const_symbol(name.clone(), clone_box(node.as_ref()))?;
-        self.emit.source_map.register_const(name, value)?;
+        let literal = crate::lang::parse_const_literal(token, explicit_ty)?;
+        self.register_const_symbol(name.clone(), clone_box(literal.node.as_ref()))?;
+        self.emit.source_map.register_const(name, literal.display)?;
         Ok(push_empty())
     }
 
@@ -230,7 +225,7 @@ impl Syntax {
             Some(Token::Partition('[')) => ('[', ']'),
             _ => return errf!("log argv number invalid"),
         };
-        let mut subs = self.parse_value_container(open, close, "log argv number invalid")?;
+        let subs = self.parse_value_container(open, close, "log argv number invalid")?;
         let inst = match subs.len() {
             2 => LOG1,
             3 => LOG2,
@@ -238,8 +233,7 @@ impl Syntax {
             5 => LOG4,
             _ => return errf!("log argv number invalid"),
         };
-        subs.push(push_inst_noret(inst));
-        Ok(Box::new(Self::build_irlist(subs)?))
+        super::call::build_log_irnode(inst, subs)
     }
 
     fn parse_single_value_stmt(
@@ -272,6 +266,11 @@ impl Syntax {
                 _ => return errf!("bytecode format invalid"),
             }
         }
-        Ok(Box::new(IRNodeBytecodes { codes }))
+        // Surface-level `bytecode { ... }` must produce a runtime-safe
+        // fragment: no IR-only opcodes, no absolute jumps, no misaligned
+        // params. Routing through `IRNodeBytecodes::new` is the single
+        // construction-time gate, matching the serialized-IR parser entry.
+        let node = IRNodeBytecodes::new(codes).map_err(|e| e.to_string())?;
+        Ok(Box::new(node))
     }
 }

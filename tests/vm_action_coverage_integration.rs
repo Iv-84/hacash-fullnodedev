@@ -131,10 +131,31 @@ mod action_coverage {
     ) -> XRet<(u32, Vec<u8>)> {
         let mut act = ContractDeploy::new();
         act.nonce = Uint4::from(nonce);
-        // Provide generous protocol fee to cover any contract size
-        act.protocol_cost = Amount::coin(10000, 244);
         act.contract = contract;
+        act.protocol_cost = contract_protocol_cost_min(
+            ctx,
+            act.contract.size(),
+            protocol::params::CONTRACT_STORE_PERM_PERIODS,
+        )?;
         act.execute(ctx)
+    }
+
+    fn deploy_protocol_cost(ctx: &dyn Context, contract: &ContractSto) -> Amount {
+        contract_protocol_cost_min(
+            ctx,
+            contract.size(),
+            protocol::params::CONTRACT_STORE_PERM_PERIODS,
+        )
+        .expect("deploy protocol cost min")
+    }
+
+    fn update_protocol_cost(ctx: &dyn Context, edit: &vm::ContractEdit) -> Amount {
+        contract_protocol_cost_min(
+            ctx,
+            edit.size(),
+            protocol::params::CONTRACT_STORE_PERM_PERIODS,
+        )
+        .expect("update protocol cost min")
     }
 
     fn fund_main_addr(ctx: &mut dyn Context) {
@@ -959,12 +980,12 @@ mod action_coverage {
         ctx.env.chain.fast_sync = true;
         fund_main_addr(&mut ctx);
 
+        let over = SpaceCap::new(1).value_size + 1;
         let mut act = ContractDeploy::new();
         act.nonce = Uint4::from(77u32);
-        act.protocol_cost = Amount::coin(10000, 244);
-        let over = SpaceCap::new(1).value_size + 1;
         act.construct_argv = BytesW2::from(vec![0xAB; over]).unwrap();
         act.contract = make_external_contract("f", "return 0");
+        act.protocol_cost = deploy_protocol_cost(&ctx, &act.contract);
 
         let err = act.execute(&mut ctx).unwrap_err();
         assert!(err.contains("construct argv size overflow"), "{err}");
@@ -986,7 +1007,6 @@ mod action_coverage {
 
         let mut act = ContractDeploy::new();
         act.nonce = Uint4::from(78u32);
-        act.protocol_cost = Amount::coin(10000, 244);
         act.contract = Contract::new()
             .func(
                 Func::new("f")
@@ -996,6 +1016,7 @@ mod action_coverage {
                     .unwrap(),
             )
             .into_sto();
+        act.protocol_cost = deploy_protocol_cost(&ctx, &act.contract);
         act.execute(&mut ctx).unwrap();
 
         let caddr = contract_addr(&main, 78);
@@ -1022,7 +1043,6 @@ mod action_coverage {
 
         let mut act = ContractDeploy::new();
         act.nonce = Uint4::from(79u32);
-        act.protocol_cost = Amount::coin(10000, 244);
         act.construct_argv = BytesW2::from(vec![0xEE]).unwrap();
         act.contract = Contract::new()
             .func(
@@ -1033,6 +1053,7 @@ mod action_coverage {
                     .unwrap(),
             )
             .into_sto();
+        act.protocol_cost = deploy_protocol_cost(&ctx, &act.contract);
 
         let err = act.execute(&mut ctx).unwrap_err();
         assert!(
@@ -1061,7 +1082,6 @@ mod action_coverage {
 
         let mut act = ContractDeploy::new();
         act.nonce = Uint4::from(80u32);
-        act.protocol_cost = Amount::coin(10000, 244);
         act.contract = Contract::new()
             .syst(
                 vm::contract::Abst::new(vm::rt::AbstCall::Construct)
@@ -1076,6 +1096,7 @@ mod action_coverage {
                     .unwrap(),
             )
             .into_sto();
+        act.protocol_cost = deploy_protocol_cost(&ctx, &act.contract);
 
         let err = act.execute(&mut ctx).unwrap_err();
         assert!(
@@ -1104,7 +1125,6 @@ mod action_coverage {
 
         let mut act = ContractDeploy::new();
         act.nonce = Uint4::from(81u32);
-        act.protocol_cost = Amount::coin(10000, 244);
         let cap = SpaceCap::new(1).value_size;
         act.construct_argv = BytesW2::from(vec![0xCD; cap]).unwrap();
         act.contract = Contract::new()
@@ -1121,6 +1141,7 @@ mod action_coverage {
                     .unwrap(),
             )
             .into_sto();
+        act.protocol_cost = deploy_protocol_cost(&ctx, &act.contract);
         act.execute(&mut ctx).unwrap();
 
         let caddr = contract_addr(&main, 81);
@@ -1147,8 +1168,8 @@ mod action_coverage {
 
         let mut act = ContractDeploy::new();
         act.nonce = Uint4::from(82u32);
-        act.protocol_cost = Amount::coin(10000, 244);
         act.contract = make_external_contract("f", "return 0");
+        act.protocol_cost = deploy_protocol_cost(&ctx, &act.contract);
         let err = act.execute(&mut ctx).unwrap_err();
         assert!(err.contains("requires tx type >= 3"), "{err}");
     }
@@ -1365,8 +1386,8 @@ mod action_coverage {
 
         let mut act = ContractUpdate::new();
         act.address = caddr.to_addr();
-        act.protocol_cost = Amount::coin(10000, 244);
         act.edit = edit;
+        act.protocol_cost = update_protocol_cost(&ctx, &act.edit);
         let err = act.execute(&mut ctx).unwrap_err();
         assert!(
             err.contains("abst call Append not found in")
@@ -1415,8 +1436,8 @@ mod action_coverage {
 
         let mut act = ContractUpdate::new();
         act.address = caddr.to_addr();
-        act.protocol_cost = Amount::coin(10000, 244);
         act.edit = edit;
+        act.protocol_cost = update_protocol_cost(&ctx, &act.edit);
         let err = act.execute(&mut ctx).unwrap_err();
         assert!(
             err.contains("abst call Change not found in")
@@ -1457,29 +1478,13 @@ mod action_coverage {
                     .unwrap(),
             )
             .into_edit(1);
-        let old_size = Contract::new()
-            .syst(Abst::new(AbstCall::Construct).fitsh("return 0").unwrap())
-            .syst(Abst::new(AbstCall::Append).fitsh("return 0").unwrap())
-            .into_sto()
-            .size();
-        let new_size = old_size + edit.size();
-        let delta_bytes = new_size.saturating_sub(old_size);
         let edit_bytes = edit.size();
-        let fee_purity =
-            ctx.tx()
-                .fee_purity()
-                .max(vm::action::CONTRACT_STORE_LOWEST_FEE_PURITY as u64) as u128;
-        let _expected = Amount::coin_u128(
-            fee_purity
-                .saturating_mul(delta_bytes as u128)
-                .saturating_mul(vm::action::CONTRACT_STORE_PERM_PERIODS as u128)
-                .saturating_add(
-                    fee_purity
-                        .saturating_mul(edit_bytes as u128)
-                        .saturating_mul(vm::action::CONTRACT_STORE_PERM_PERIODS as u128),
-                ),
-            field::UNIT_238,
-        );
+        let expected = contract_protocol_cost_min(
+            &ctx,
+            edit_bytes,
+            protocol::params::CONTRACT_STORE_PERM_PERIODS,
+        )
+        .unwrap();
 
         let mut act = ContractUpdate::new();
         act.address = caddr.to_addr();
@@ -1488,6 +1493,7 @@ mod action_coverage {
         let err = act.execute(&mut ctx).unwrap_err();
         assert!(
             err.contains("protocol fee must be at least")
+                && err.contains(&expected.to_fin_string())
                 && err.contains("edit_bytes=25")
                 && err.contains("edit_periods=10000"),
             "{err}"

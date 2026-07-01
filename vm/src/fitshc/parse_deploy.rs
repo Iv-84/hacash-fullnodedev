@@ -2,6 +2,7 @@ use super::state::ParseState;
 use crate::Token::*;
 use crate::rt::*;
 use field::{Amount, BytesW2, Uint4};
+use std::collections::HashSet;
 use sys::*;
 use sys::{Ret, errf};
 
@@ -19,12 +20,15 @@ pub fn parse_deploy(state: &mut ParseState) -> Ret<DeployInfo> {
 
     let mut info = DeployInfo::default();
     info.matches = true;
+    let mut seen = HashSet::new();
 
     loop {
-        state.skip_soft_separators();
         if let Some(Partition('}')) = state.current() {
             state.advance();
             break;
+        }
+        if matches!(state.current(), Some(Partition(','))) {
+            return errf!("unexpected deploy separator");
         }
 
         let key = if let Some(Identifier(n)) = state.current() {
@@ -34,99 +38,73 @@ pub fn parse_deploy(state: &mut ParseState) -> Ret<DeployInfo> {
         } else {
             return errf!("expected deploy key");
         };
+        if !seen.insert(key.clone()) {
+            return errf!("duplicate deploy field '{}'", key);
+        }
 
-        // let mut key_colon = false;
         if let Some(Keyword(KwTy::Colon)) = state.current() {
-            // key_colon = true;
             state.advance();
-        } else if let Some(Partition(':')) = state.current() {
-            // key_colon = true;
-            state.advance();
+        } else {
+            return errf!("expected ':' after deploy field '{}'", key);
         }
 
         if key == "protocol_cost" {
-            // value If tokenizer splits "1:248", we might see "1" ":" "248" or string "1:248" depending on tokenizer. Tokenizer treats ':' as symbol. So "1:248" becomes Int(1), Sym(:), Int(248). But if user quoted it '"1:248"', it becomes Bytes(utf8).
-            if let Some(Bytes(v)) = state.current() {
-                let s = String::from_utf8_lossy(v);
-                let amt = Amount::from(s.as_ref()).map_err(|e| e.to_string())?;
-                info.protocol_cost = Some(amt);
-                state.advance();
-            } else if let Some(Identifier(v)) = state.current() {
-                let amt = Amount::from(v).map_err(|e| e.to_string())?;
-                info.protocol_cost = Some(amt);
-                state.advance();
-            } else if let Some(Integer(v)) = state.current() {
-                // support 1:248 without quotes
-                let mut val = v.to_string();
-                let mut consumed = false;
-                if state.idx + 2 < state.max {
-                    let has_colon = matches!(
-                        state.tokens.get(state.idx + 1),
-                        Some(Keyword(KwTy::Colon)) | Some(Partition(':'))
-                    );
-                    if has_colon {
-                        if let Some(Integer(v2)) = state.tokens.get(state.idx + 2) {
-                            val = format!("{}:{}", v, v2);
-                            state.advance(); // first integer
-                            state.advance(); // colon
-                            state.advance(); // second integer
-                            consumed = true;
-                        }
-                    }
-                }
-                let amt = Amount::from(val.as_str()).map_err(|e| e.to_string())?;
-                info.protocol_cost = Some(amt);
-                if !consumed {
-                    state.advance();
-                }
-            } else {
-                return errf!("expected amount at protocol_cost");
-            }
+            info.protocol_cost = Some(parse_amount_ctor(state)?);
         } else if key == "nonce" {
-            if let Some(Integer(v)) = state.current() {
-                let n = u32::try_from(*v).map_err(|_| format!("nonce overflow: {}", v))?;
-                info.nonce = Some(Uint4::from(n));
-                state.advance();
-            } else if let Some(Identifier(v)) = state.current() {
-                let n = v
-                    .parse::<u32>()
-                    .map_err(|_| format!("invalid nonce: {}", v))?;
-                info.nonce = Some(Uint4::from(n));
-                state.advance();
-            } else {
-                return errf!("expected nonce integer");
-            }
+            info.nonce = Some(Uint4::from(parse_nonce(state)?));
         } else if key == "construct_argv" {
-            // Support hex string
             if let Some(Bytes(v)) = state.current() {
-                let s = String::from_utf8_lossy(v);
-                let s = s.as_ref();
-                let bts = if let Some(hexstr) = s.strip_prefix("0x") {
-                    hex::decode(hexstr).map_err(|e| e.to_string())?
-                } else {
-                    s.as_bytes().to_vec()
-                };
-                info.construct_argv = Some(BytesW2::from(bts).map_err(|e| e.to_string())?);
-                state.advance();
-            } else if let Some(Identifier(v)) = state.current() {
-                let bts = if let Some(hexstr) = v.strip_prefix("0x") {
-                    hex::decode(hexstr).map_err(|e| e.to_string())?
-                } else {
-                    v.as_bytes().to_vec()
-                };
-                info.construct_argv = Some(BytesW2::from(bts).map_err(|e| e.to_string())?);
+                info.construct_argv = Some(BytesW2::from(v.clone()).map_err(|e| e.to_string())?);
                 state.advance();
             } else {
-                return errf!("expected argv value");
+                return errf!("expected bytes literal at construct_argv");
             }
         } else {
             return errf!("unknown deploy field '{}'", key);
         }
 
-        state.skip_soft_separators();
+        if matches!(state.current(), Some(Partition(','))) {
+            state.advance();
+            if matches!(state.current(), Some(Partition(','))) {
+                return errf!("duplicate deploy separator");
+            }
+        }
     }
 
     Ok(info)
+}
+
+fn parse_amount_ctor(state: &mut ParseState) -> Ret<Amount> {
+    match state.current() {
+        Some(Identifier(id)) if id == "amount" => state.advance(),
+        _ => return errf!("expected amount(\"...\") at protocol_cost"),
+    }
+    state.eat_partition('(')?;
+    let Some(Bytes(raw)) = state.current() else {
+        return errf!("expected amount string at protocol_cost");
+    };
+    let text = String::from_utf8(raw.clone())
+        .map_err(|_| "amount string must be ascii bytes".to_string())?;
+    state.advance();
+    state.eat_partition(')')?;
+    Amount::from(text.as_str()).map_err(|e| e.to_string())
+}
+
+fn parse_nonce(state: &mut ParseState) -> Ret<u32> {
+    match state.current() {
+        Some(Integer(v)) => {
+            let n = u32::try_from(*v).map_err(|_| format!("nonce overflow: {}", v))?;
+            state.advance();
+            Ok(n)
+        }
+        Some(IntegerWithSuffix(v, KwTy::U32)) => {
+            let n = u32::try_from(*v).map_err(|_| format!("nonce overflow: {}", v))?;
+            state.advance();
+            Ok(n)
+        }
+        Some(IntegerWithSuffix(_, _)) => errf!("nonce type must be u32"),
+        _ => errf!("expected nonce integer"),
+    }
 }
 
 #[cfg(test)]
