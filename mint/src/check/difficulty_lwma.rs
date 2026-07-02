@@ -86,6 +86,10 @@ impl DifficultyGnr {
         hei >= self.asert_upgrade_height()
     }
 
+    pub fn is_historical_lwma_height(&self, hei: u64) -> bool {
+        self.cnf.is_mainnet() && self.is_upgrade_height(hei) && !self.is_asert_height(hei)
+    }
+
     fn use_bootstrap_rule(&self, hei: u64) -> bool {
         hei <= self.window_blocks() + 1
     }
@@ -557,6 +561,16 @@ mod difficulty_tests {
         let dgnr = new_test_dgnr();
         assert!(!dgnr.is_asert_height(738653));
         assert!(dgnr.is_asert_height(738654));
+    }
+
+    #[test]
+    fn mainnet_lwma_window_is_marked_historical() {
+        let _setup = scoped_protocol_setup();
+        let dgnr = new_test_dgnr();
+        assert!(!dgnr.is_historical_lwma_height(738143));
+        assert!(dgnr.is_historical_lwma_height(738144));
+        assert!(dgnr.is_historical_lwma_height(738653));
+        assert!(!dgnr.is_historical_lwma_height(738654));
     }
 
     #[test]

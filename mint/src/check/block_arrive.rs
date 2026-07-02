@@ -45,6 +45,11 @@ fn impl_blk_arrive(
         biddings.mark_block_arrival(curhei, cblkhx);
         return Ok(())
     }
+    if this.difficulty.is_historical_lwma_height(curhei) {
+        let mut biddings = this.bidding_prove.lock().unwrap();
+        biddings.mark_block_arrival(curhei, cblkhx);
+        return Ok(())
+    }
 
     let src = StoreBlockIntroSource::new(sto);
     if this.difficulty.is_asert_height(curhei) {
