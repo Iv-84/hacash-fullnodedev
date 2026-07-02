@@ -24,6 +24,8 @@ fn check_call_mode(exec: ExecCtx, call: &CallSpec) -> VmrtErr {
 }
 
 fn local_operand(mark: u8, locals: &mut Stack, mut value: Value) -> VmrtErr {
+    // XOP: stack top is rhs; local[idx] from mark is lhs. Result stays in local[idx].
+    // Caller charges stack_write on the stored result val_size (see execute.rs XOP).
     let (opt, idx) = decode_local_operand_mark(mark);
     let basev = locals.slot_mut(idx)?;
     match opt {
@@ -38,6 +40,7 @@ fn local_operand(mark: u8, locals: &mut Stack, mut value: Value) -> VmrtErr {
 }
 
 fn local_logic(mark: u8, locals: &mut Stack, value: &mut Value) -> VmrtErr {
+    // XLG: stack top is rhs; local[idx] from mark is lhs. Result overwrites rhs on stack.
     let (opt, idx) = decode_local_logic_mark(mark);
     let basev = locals.slot_mut(idx)?;
     let out = match opt {

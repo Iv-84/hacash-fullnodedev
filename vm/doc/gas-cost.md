@@ -75,12 +75,12 @@ For dynamic billing based on a VM value object, byte size is usually `Value::val
 - 32 + byte/64: every cold contract load, where byte is `ContractSto.size()`.
 - 1024: every newly created persistent storage key.
 - HGROW: first 8 heap segments cost 2, 4, 8, 16, 32, 64, 128, 256; later segments cost 256 each.
-- 1 per moved stack item: POPN moves `n`, ROLL0 moves 1, ROLL moves `n + 1`, REV moves `n`, SWAP moves 2.
+- 1 per moved stack item: POPN moves `n`, ROLL0 moves 1, ROLL moves `n + 1`, REV moves `n`, SWAP moves 2, CHOOSE moves 2.
 
 ### Stack payload copy/write/op
 
 - byte/32: DUP, DUPN, GET, GET0, GET1, GET2, GET3, GETX, MGET, GGET, MTAKE, PBUF, PBUFL.
-- byte/28: PUT, PUTX, MPUT, GPUT, UNPACK local-slot writes (`stack_write_div`).
+- byte/28: PUT, PUTX, XOP, MPUT, GPUT, UNPACK local-slot writes (`stack_write_div`). PUTX stack order: `idx` then `val` — see `operand-stack.md`.
 - byte/20: CAT, JOIN, BYTE, CUT, LEFT, RIGHT, LDROP, RDROP. The measured byte count is the source/input payload size used by the operation.
 
 ### Reference compare
@@ -110,7 +110,7 @@ NTFUNC, NTENV, and NTCTL have three components: opcode base, byte-extra, and nat
 
 KEYS and VALUES byte counts include output bytes. For maps, byte count includes key bytes plus value bytes.
 
-- item/4: HASKEY, ITEMGET, KEYS, VALUES.
+- item/4: HASKEY, ITEMGET, KEYS, VALUES, UNPACK (source container `container_len` before clone/unpack).
 - item/2: PACKLIST, PACKMAP, PACKTUPLE, INSERT, REMOVE, CLEAR, TAKEFIRST, TAKELAST, APPEND.
 - item/1: CLONE, MERGE, TUPLE2LIST.
 - byte/40: INSERT map key bytes and inserted value bytes; APPEND value bytes; CLEAR total compo `val_size()`; MERGE source bytes; ITEMGET/TAKEFIRST/TAKELAST output value bytes; KEYS/VALUES output bytes; CLONE copied bytes; TUPLE2LIST copied bytes.

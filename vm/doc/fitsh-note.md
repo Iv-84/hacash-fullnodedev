@@ -49,6 +49,18 @@ Rule of thumb:
 - Use `IRLIST` when you are building an expression pipeline and you explicitly control stack effects via the final instruction.
 - Use `IRBLOCK/IRBLOCKR` when you want block semantics with automatic cleanup (and optional “return last value”).
 
+### 3.2 Operand stack and handwritten IR (see `operand-stack.md`)
+
+IR children codegen **left to right** → operand stack **bottom to top** (`subx`, `suby`, `subz`). This matches Fitsh call syntax (`choose(c,y,n)` → `[c,y,n]`).
+
+Non-obvious cases for bytecode / IR authors:
+
+- **`PACKLIST` / `PACKMAP` / `PACKTUPLE`**: items (and map k/v pairs) first, **literal count last** on stack top.
+- **`PUTX` / `local_x_put`**: stack `[idx, val]` — not `(val, idx)`.
+- **`XLG` / `XOP`**: only **rhs** on stack; lhs is `locals[idx]` from the instruction mark. Fitsh does not emit `XLG`.
+- **`byte` / `BYTE`**, **`buf_cut` / `CUT`**: stack `[buf, …args]` bottom→top — e.g. `buf_cut(buf, start, len)` → `[buf, start, len]`; do **not** reverse to `len, start, buf`.
+- **In-place ops** (`GGET`, casts, binary ops): often update the bottom slot instead of push/pop.
+
 ## 4. Statement structure
 - `var name [$slot]? = expr`: evaluates immediately and stores the result in a local slot; the slot can be explicitly numbered (`syntax.rs:620-654`). Use this for mutable state or expressions with side effects.  
 - `let name = expr`: immutable slot binding that runs eagerly and cannot be reassigned; var declarations without further updates are decompiled into `let` statements.  
