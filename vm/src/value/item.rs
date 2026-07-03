@@ -64,27 +64,10 @@ pub(crate) fn add_size_saturating(total: usize, add: usize) -> usize {
 // without first checking whether the surrounding code needs identity semantics or
 // true VM semantic equality.
 //
-// KNOWN PITFALLS (see `vm/doc/value-cast.md` §9 for full context):
-//
-// `value_content_eq` and map-key encoding (`extract_key_bytes` → `scalar_bytes`)
-// are independent code paths with different normalization rules. This causes:
-//
-// 1. uint cross-width key splitting:
-//    `value_content_eq(U8(1), U64(1))` is `true` (both normalized to `u128`),
-//    but `scalar_bytes(U8(1))` → `[01]` while `scalar_bytes(U64(1))` → `[00..01]`.
-//    Same numeric value lands in different map slots. In DeFi, a balance written
-//    with `U8` reads as `Nil` when queried with `U64`.
-//
-// 2. Address / Bytes key collision:
-//    `scalar_bytes(Address(X))` == `scalar_bytes(Bytes(X.serialize()))` — identical
-//    bytes share a map key — but `value_content_eq` rejects cross-type comparison.
-//
-// 3. Dual byte→uint conversion paths:
-//    `buf_to_uint` (minimal width) vs `cast_to_uint_width` (fixed width) can
-//    produce different uint variants from the same source bytes, amplifying (1).
-//
-// Mitigation: use consistent types and widths for all map operations on a given
-// key. When crossing contract or opcode boundaries, explicitly normalize first.
+// Map-key pitfalls (see `vm/doc/value-cast.md` §9): uint keys are value-normalized via
+// `extract_key_bytes` / `uint_key_bytes`; `scalar_bytes` below is for field serialization
+// only and keeps fixed-width uint encoding. Cross-type key collision (Address vs Bytes)
+// remains possible when raw bytes match.
 pub(crate) fn value_content_eq(lhs: &Value, rhs: &Value) -> VmrtRes<bool> {
     if lhs.is_uint() && rhs.is_uint() {
         return Ok(lhs.extract_u128()? == rhs.extract_u128()?);
@@ -330,14 +313,8 @@ impl Value {
     }
 
 
-    /// Representation bytes (not canonical/value-normalized bytes).
-    /// Used by field serialization and, via `extract_key_bytes`, for map keys.
-    ///
-    /// IMPORTANT: map-key bytes preserve concrete variant and width. For uints,
-    /// `scalar_bytes(U8(1))` → `[01]` but `scalar_bytes(U64(1))` → `[00..01]`.
-    /// `value_content_eq` normalizes both to `u128` and returns `true`, so the
-    /// two paths disagree on whether `U8(1)` and `U64(1)` are "the same thing".
-    /// See `value_content_eq` above and `vm/doc/value-cast.md` §9.
+    /// Representation bytes for field serialization (fixed-width uint BE).
+    /// Map keys use `extract_key_bytes` / `uint_key_bytes` instead — see `vm/doc/value-cast.md` §9.
     pub(crate) fn scalar_bytes(&self) -> Option<Vec<u8>> {
         match self {
             Nil => Some(vec![]),

@@ -13,7 +13,7 @@ fn doc_tracks_current_dynamic_metering_groups() {
         "GETX",
         "PBUF",
         "PBUFL",
-        "PUT, PUTX, MPUT, GPUT",
+        "PUT, PUTX, XOP, MPUT, GPUT",
         "byte/28",
         "stack_write_div",
         "CAT, JOIN, BYTE, CUT, LEFT, RIGHT, LDROP, RDROP",

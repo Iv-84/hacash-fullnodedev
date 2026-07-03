@@ -44,6 +44,22 @@ pub fn trim_leading_zero_bytes(buf: &[u8]) -> &[u8] {
     &buf[first_nz..]
 }
 
+/// Canonical map-key bytes for any uint scalar (value-defined, width-independent).
+///
+/// Leading zero bytes are trimmed; numeric zero maps to `[0x00]` so empty keys are rejected.
+/// `U8(1)`, `U64(1)`, and future wider uints with the same value share one key encoding.
+/// See `vm/doc/value-cast.md` §9.1 and `Value::extract_key_bytes`.
+#[inline(always)]
+pub fn uint_key_bytes(n: u128) -> Vec<u8> {
+    let be = n.to_be_bytes();
+    let trimmed = trim_leading_zero_bytes(&be);
+    if trimmed.is_empty() {
+        vec![0u8]
+    } else {
+        trimmed.to_vec()
+    }
+}
+
 #[inline(always)]
 pub fn fit_be_bytes<const N: usize>(buf: &[u8]) -> Option<[u8; N]> {
     if buf.len() <= N {
@@ -131,5 +147,13 @@ mod value_output_len_tests {
         assert_eq!(buf_drop_left_zero(&[0, 0, 0], 0), Vec::<u8>::new());
         assert_eq!(buf_drop_left_zero(&[0, 0, 3], 0), vec![3]);
         assert_eq!(buf_drop_left_zero(&[0, 0, 0], 2), vec![0, 0]);
+    }
+
+    #[test]
+    fn uint_key_bytes_uses_minimal_be_and_zero_sentinel() {
+        assert_eq!(uint_key_bytes(1), vec![1]);
+        assert_eq!(uint_key_bytes(0), vec![0]);
+        assert_eq!(uint_key_bytes(0x0102), vec![0x01, 0x02]);
+        assert_eq!(uint_key_bytes(256), vec![0x01, 0x00]);
     }
 }
