@@ -13,11 +13,12 @@ fn doc_tracks_current_dynamic_metering_groups() {
         "GETX",
         "PBUF",
         "PBUFL",
-        "PUT, PUTX, MPUT, GPUT",
+        "PUT, PUTX, XOP, MPUT, GPUT",
         "byte/28",
         "stack_write_div",
         "CAT, JOIN, BYTE, CUT, LEFT, RIGHT, LDROP, RDROP",
         "SWAP moves 2",
+        "CHOOSE moves 2",
         "EQ, NEQ, XLG (`==` / `!=` only)",
         "stack_cmp_div",
         "Ordered comparisons LT, GT, LE, GE",
@@ -57,6 +58,7 @@ fn doc_tracks_current_dynamic_metering_groups() {
         "Charging point: frame entry",
         "compiled code only",
         "Coverage Notes",
+        "UNPACK (source container",
     ] {
         assert!(DOC.contains(key), "missing section key: {key}");
     }

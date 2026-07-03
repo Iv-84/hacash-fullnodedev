@@ -1893,6 +1893,32 @@ mod bounds_tests {
     }
 
     #[test]
+    fn xop_stack_write_uses_result_val_size() {
+        use crate::rt::Bytecode;
+        use crate::rt::{encode_local_operand_mark, LxOp};
+
+        let mark = encode_local_operand_mark(LxOp::Add, 0).unwrap();
+        let run = |local: Value, rhs: Value| -> i64 {
+            run_with_setup(
+                vec![Bytecode::XOP as u8, mark, Bytecode::END as u8],
+                DummyHost::default(),
+                |ops, locals, _heap, _global_map, _memory_map, _cadr| {
+                    locals.alloc(1).unwrap();
+                    locals.save(0, local).unwrap();
+                    ops.push(rhs).unwrap();
+                },
+            )
+        };
+
+        let gas = run(Value::U8(0), Value::U8(1));
+        let gas_table = GasTable::new(1);
+        let gas_extra = GasExtra::new(1);
+        let base = gas_table.gas(Bytecode::XOP as u8) + gas_table.gas(Bytecode::END as u8);
+        let result_sz = Value::U8(1).val_size();
+        assert_eq!(gas, base + gas_extra.stack_write(result_sz));
+    }
+
+    #[test]
     fn putx_space_write_uses_val_size() {
         use crate::rt::Bytecode;
 
@@ -2365,6 +2391,57 @@ mod bounds_tests {
                 + gas_table.gas(Bytecode::END as u8)
                 + gas_extra.stack_move_items(2)
         );
+    }
+
+    #[test]
+    fn choose_charges_two_stack_move_items() {
+        use crate::rt::Bytecode;
+
+        let gas = run_with_setup(
+            vec![
+                Bytecode::PTRUE as u8,
+                Bytecode::P1 as u8,
+                Bytecode::P0 as u8,
+                Bytecode::CHOOSE as u8,
+                Bytecode::END as u8,
+            ],
+            DummyHost::default(),
+            |_ops, _locals, _heap, _global_map, _memory_map, _cadr| {},
+        );
+
+        let gas_table = GasTable::new(1);
+        let gas_extra = GasExtra::new(1);
+        assert_eq!(
+            gas,
+            gas_table.gas(Bytecode::PTRUE as u8)
+                + gas_table.gas(Bytecode::P1 as u8)
+                + gas_table.gas(Bytecode::P0 as u8)
+                + gas_table.gas(Bytecode::CHOOSE as u8)
+                + gas_table.gas(Bytecode::END as u8)
+                + gas_extra.stack_move_items(2)
+        );
+    }
+
+    #[test]
+    fn unpack_charges_compo_items_read_on_container_len() {
+        use crate::rt::Bytecode;
+
+        let run = |n: usize| -> i64 {
+            let items: Vec<Value> = (0..n).map(|i| Value::U8(i as u8)).collect();
+            let tuple = Value::Tuple(TupleItem::new(items).unwrap());
+            run_with_setup(
+                vec![Bytecode::UNPACK as u8, Bytecode::END as u8],
+                DummyHost::default(),
+                |ops, locals, _heap, _global_map, _memory_map, _cadr| {
+                    locals.alloc(n as u8).unwrap();
+                    ops.push(tuple).unwrap();
+                    ops.push(Value::U8(0)).unwrap();
+                },
+            )
+        };
+
+        assert_eq!(run(4), run(3) + 1);
+        assert_eq!(run(5), run(4) + 2);
     }
 
     #[test]

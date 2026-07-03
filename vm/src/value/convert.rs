@@ -1,15 +1,8 @@
 /// Convert raw bytes to a uint `Value` of the **minimal** active width.
 /// Leading zeros are trimmed; the effective length determines the target variant.
 ///
-/// PITFALL: there is a second byte→uint path — `cast_to_uint_width` / `bytes_to_uint_width`
-/// (in `cast.rs`) — that converts to a **fixed** target width. The same source bytes can
-/// produce `U8(1)` via this function and `U64(1)` via the fixed-width path. When the result
-/// is used as a map key, the two variants land in different slots (`scalar_bytes` encodes
-/// each width separately), amplifying the uint cross-width key splitting documented in
-/// `vm/doc/value-cast.md` §9.1.
-///
-/// Prefer a single consistent conversion path, and always normalize to the same uint width
-/// for map operations on a given key.
+/// Map keys normalize via `uint_key_bytes` on the numeric value, so `U8(1)` and `U64(1)`
+/// share one slot. See `vm/doc/value-cast.md` §9.1.
 pub(crate) fn buf_to_uint(buf: &[u8]) -> VmrtRes<Value> {
     let raw = trim_leading_zero_bytes(buf);
     let sz = raw.len();

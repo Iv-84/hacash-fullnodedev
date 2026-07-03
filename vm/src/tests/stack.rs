@@ -26,6 +26,7 @@ pub fn stack_test_1() {
         P0 P1 PU8 2 PU8 3 JOIN 4 END
     };
     let _codes9 = build_codes!{
+        // buf_cut(buf, ost, len): PBUF -> P1 (ost) -> PU8 3 (len); stack bottom->top [buf,1,3]
         PBUF 4 0 1 2 3 P1 PU8 3 CUT END
     };
     let _codes10 = build_codes!{

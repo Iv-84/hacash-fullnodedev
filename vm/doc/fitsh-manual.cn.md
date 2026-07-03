@@ -415,6 +415,27 @@ x is address
 5. **空字节**：`Bytes([])` 不能当零参与算术；需要数值零时用 `0 as u64`。
 6. **Map 重复键**：字面量 `map { ... }` / `PACKMAP` 与 `MERGE` 拒重键（不可恢复失败 / **Fault**）；`INSERT` 对已有键覆盖（见 `value-cast.md` §8）。
 
+### 7.5 操作数栈与手写 IR 参数顺序
+
+Fitsh IR codegen 按子节点**从左到右**压栈：`subx` 在**栈底**，最后一个 child 在**栈顶**。这与源码参数顺序一致（`choose(cond, yes, no)` → 栈 `[cond, yes, no]`），而不是「条件在栈顶」的三元布局。
+
+手写字节码 / `bytecode { … }` / 直接 IR 调用须遵守相同顺序。完整表格见 **`operand-stack.md`**。
+
+易错点摘要：
+
+| 主题 | 正确顺序（底 → 顶） | 常见误用 |
+|------|---------------------|----------|
+| `PACKLIST` / `PACKMAP` / `PACKTUPLE` | 元素…，**count 在最后** | 先压 count 的 `pack(n, …)` |
+| `local_x_put` / `PUTX` | **idx, val** | `(val, idx)` |
+| `local_x` / `GETX` | 仅 **idx** | |
+| `XLG` | 栈上仅 rhs；lhs 为 `local[idx]` | 用 `XLG` 表达 `expr > local`（应 `GET` + 比较） |
+| `XOP` | 栈上仅 rhs；语义 `local[idx] op=` | 当成双栈操作数 |
+| `byte` / `BYTE` | **buf, idx** | `(idx, buf)` 或 `len, ost, buf` 式逆序 |
+| `buf_cut` / `CUT` | **buf, start, len** | 误写为 `len, start, buf`（旧注释遗留） |
+| `GGET` / `SLOAD` / … | key 原位被 value **替换** | 当成 `push get(key)` |
+
+Fitsh 源码对字面量、`param`、槽位 `+=` 会生成正确形态；低层 opcode 主要影响 **`bytecode` 块**与 **`local_x_put` / `local_x` IR 调用**。
+
 ---
 
 ## 8. 变量与局部栈槽位

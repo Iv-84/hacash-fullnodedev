@@ -137,28 +137,28 @@ impl Value {
         self.extract_bytes_with_error_code(CastBeBytesFail)
     }
 
-    /// Derive map key bytes from a value. Keys are representation bytes (`scalar_bytes`),
-    /// not canonical/value-normalized bytes — they reflect the concrete variant and width.
+    /// Derive map key bytes from a value.
     ///
-    /// KNOWN PITFALLS (see `vm/doc/value-cast.md` §9):
+    /// Uint keys use value-defined minimal big-endian (`uint_key_bytes`), so equal uints
+    /// share one slot regardless of variant width. `Bytes` and `Address` use raw payload
+    /// bytes (`extract_bytes` / `scalar_bytes`). See `vm/doc/value-cast.md` §9.
     ///
-    /// - `value_content_eq` normalizes all uint widths to `u128`, but this function
-    ///   encodes each width separately. `U8(1)` → `[01]`, `U64(1)` → `[00..01]` —
-    ///   numerically equal uints land in different map slots.
-    /// - `Address(X)` and `Bytes(X.serialize())` produce identical key bytes, so
-    ///   they share a map slot even though they are semantically distinct types.
-    /// - Bool and empty bytes are rejected as keys; Nil is rejected.
-    ///
-    /// Mitigation: use a consistent type and width for all map operations on a given key.
+    /// Bool, Nil, and empty `Bytes` are rejected as keys.
     pub(crate) fn extract_key_bytes_with_error_code(&self, ec: ItrErrCode) -> VmrtRes<Vec<u8>> {
-        let key = match self {
-            Bool(..) => return itr_err_code!(ec),
-            _ => self.extract_bytes_with_error_code(ec)?,
-        };
-        if key.is_empty() {
-            return itr_err_code!(ec);
+        match self {
+            Bool(..) => itr_err_code!(ec),
+            Nil => itr_err_code!(ec),
+            U8(..) | U16(..) | U32(..) | U64(..) | U128(..) => {
+                Ok(uint_key_bytes(self.extract_u128()?))
+            }
+            _ => {
+                let key = self.extract_bytes_with_error_code(ec)?;
+                if key.is_empty() {
+                    return itr_err_code!(ec);
+                }
+                Ok(key)
+            }
         }
-        Ok(key)
     }
 
     pub fn extract_key_bytes(&self) -> VmrtRes<Vec<u8>> {
@@ -317,6 +317,19 @@ mod canbe_tests {
         assert_eq!(bool_err.0, ItrErrCode::CastBeKeyFail);
 
         assert_eq!(Value::Bytes(vec![1]).extract_key_bytes().unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn extract_key_bytes_normalizes_uint_widths_to_minimal_be() {
+        assert_eq!(Value::U8(1).extract_key_bytes().unwrap(), vec![1]);
+        assert_eq!(Value::U64(1).extract_key_bytes().unwrap(), vec![1]);
+        assert_eq!(Value::U128(1).extract_key_bytes().unwrap(), vec![1]);
+        assert_eq!(Value::U8(0).extract_key_bytes().unwrap(), vec![0]);
+        assert_eq!(Value::U64(0).extract_key_bytes().unwrap(), vec![0]);
+        assert_eq!(
+            Value::U16(0x0102).extract_key_bytes().unwrap(),
+            vec![0x01, 0x02]
+        );
     }
 
     #[test]

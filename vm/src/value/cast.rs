@@ -37,15 +37,9 @@ fn bytes_to_fixed_width<const N: usize>(buf: &[u8], bits: u16) -> VmrtRes<[u8; N
 
 /// Convert raw bytes to a uint `Value` of a **fixed** target width.
 ///
-/// PITFALL: this is the second byte→uint path alongside `buf_to_uint` (in `convert.rs`),
-/// which picks the **minimal** active width. The same source bytes can produce `U8(1)`
-/// via `buf_to_uint` and `U64(1)` via this function. When the result is used as a map
-/// key, the two variants land in different slots (`scalar_bytes` encodes each width
-/// separately), amplifying the uint cross-width key splitting documented in
-/// `vm/doc/value-cast.md` §9.
-///
-/// Prefer a single consistent conversion path, and always normalize to the same uint
-/// width for map operations on a given key.
+/// PITFALL: there is a second byte→uint path — `buf_to_uint` (in `convert.rs`) —
+/// which picks the **minimal** active width. Map keys use `uint_key_bytes` on the
+/// numeric value, so equal uints share one slot regardless of which path produced the variant.
 fn bytes_to_uint_width(buf: &[u8], bits: u16) -> VmrtRes<Value> {
     ensure_active_uint_bits(bits)?;
     Ok(match bits {

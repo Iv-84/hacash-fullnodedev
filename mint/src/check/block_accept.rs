@@ -17,6 +17,9 @@ fn impl_blk_verify(this: &HacashMinter, curblk: &dyn BlockRead, prevblk: &dyn Bl
     }
     // coinbase address must be PRIVAKEY type for modern blocks
     verify_coinbase_privakey(ptx)?;
+    if this.difficulty.is_historical_lwma_height(curhei) {
+        return Ok(())
+    }
     let curn = curblk.difficulty().uint(); // u32
     let (tarn, tarhx, _tarbign) = this.next_difficulty(prevblk, curblk.timestamp().uint(), src);
     if tarn != curn {

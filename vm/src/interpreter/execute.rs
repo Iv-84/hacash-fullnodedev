@@ -676,6 +676,8 @@ pub fn execute_code_in_frame<H: VmHost + ?Sized>(
                     let y = c + 1;
                     let n = c + 2;
                     let pick = maybe!(ops.datas[c].extract_bool()?, y, n);
+                    // swap + truncate discards two slots — same movement tier as SWAP (2 items).
+                    gas_resource_raw!(gst.stack_move_items(2));
                     ops.datas.swap(c, pick);
                     ops.datas.truncate(l - 2);
                 } /* choose(cond, yes, no) */
@@ -688,15 +690,16 @@ pub fn execute_code_in_frame<H: VmHost + ?Sized>(
                     gas_resource!(stack_op, ops.tail_val_size_sum(n as usize)?);
                     ops.join(n, cap)?;
                 }
+                // BYTE/CUT: buf at stack bottom (subx); args toward top. Matches buf_cut(buf, start, len).
                 BYTE => {
                     gas_resource!(stack_op, ops.tail_val_size(1)?);
                     let i = ops_pop_to_u16!();
                     ops.peek()?.cutbyte(i)?;
                 }
                 CUT => {
-                    let (l, o) = (ops.pop()?, ops.pop()?);
+                    let (l, o) = (ops.pop()?, ops.pop()?); // pop len, ost (top first)
                     gas_resource!(stack_op, ops.tail_val_size(0)?);
-                    ops.peek()?.cutout(l, o)?;
+                    ops.peek()?.cutout(l, o)?; // peek buf (bottom)
                 }
                 LEFT => peek_op_gas!(cutleft(pu8_as_u16!())),
                 RIGHT => peek_op_gas!(cutright(pu8_as_u16!())),
@@ -842,11 +845,14 @@ pub fn execute_code_in_frame<H: VmHost + ?Sized>(
                 }
                 UNPACK => {
                     let i = ops.pop()?.extract_u8()?;
+                    let len = ops.peek()?.container_len()?;
+                    gas_resource!(compo_items_read, len);
                     let items = ops.peek()?.clone_unpack_items()?;
                     gas_resource_raw!(unpack_seq(i, locals, items, gst, cap)?);
                     ops.pop()?; // pop argv wrapper after unpack
                 }
                 // locals, logs, heap, global_map & memory_map
+                // XLG: one stack operand (rhs); lhs is locals[idx]. Semantics: local op rhs.
                 XLG => {
                     let mark = pu8!();
                     let (opt, idx) = decode_local_logic_mark(mark);
@@ -857,7 +863,14 @@ pub fn execute_code_in_frame<H: VmHost + ?Sized>(
                     }
                     local_logic(mark, locals, ops.peek()?)?;
                 }
-                XOP => local_operand(pu8!(), locals, ops.pop()?)?,
+                XOP => {
+                    let mark = pu8!();
+                    let rhs = ops.pop()?;
+                    local_operand(mark, locals, rhs)?;
+                    let (_, idx) = decode_local_operand_mark(mark);
+                    let vlen = locals.load(idx as usize)?.val_size();
+                    gas_resource!(stack_write, vlen);
+                }
                 GET => local_get!(pu8!()),
                 PUT => {
                     let v = ops.pop()?.valid(cap)?;
@@ -865,11 +878,13 @@ pub fn execute_code_in_frame<H: VmHost + ?Sized>(
                     gas_resource!(stack_write, vlen);
                     locals.save(pu8_as_u16!(), v)?;
                 }
+                // GETX: stack [idx] — peek idx, replace with locals[idx].
                 GETX => {
                     let v = locals.load(ops_peek_to_u16!() as usize)?.valid(cap)?;
                     gas_resource!(stack_copy, v.dup_size());
                     *ops.peek()? = v;
                 }
+                // PUTX: stack [idx, val] bottom-to-top — matches IR local_x_put(idx, val).
                 PUTX => {
                     let v = ops.pop()?.valid(cap)?;
                     let vlen = v.val_size();

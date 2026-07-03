@@ -415,6 +415,27 @@ x is address
 5. **Empty bytes**: `Bytes([])` is not a numeric zero; use `0 as u64` when you need zero.
 6. **Map duplicate keys**: literal `map { ... }` / `PACKMAP` and `MERGE` reject duplicate keys (unrecoverable **Fault**); `INSERT` overwrites an existing key (`value-cast.md` §8).
 
+### 7.5 Operand stack vs handwritten IR argument order
+
+Fitsh IR codegen pushes children **left to right** onto the operand stack: `subx` at the **bottom**, last child at the **top**. This matches source call order (`choose(cond, yes, no)` → stack `[cond, yes, no]`), not “condition on top” ternary layouts.
+
+Handwritten bytecode / `bytecode { … }` / direct IR calls must follow the same order. Full tables: **`operand-stack.md`**.
+
+High-signal pitfalls:
+
+| Topic | Correct order (bottom → top) | Common mistake |
+|-------|------------------------------|----------------|
+| `PACKLIST` / `PACKMAP` / `PACKTUPLE` | items…, **count last** | count-first `pack(n, …)` |
+| `local_x_put` / `PUTX` | **idx, val** | `(val, idx)` |
+| `local_x` / `GETX` | **idx** only | |
+| `XLG` | rhs on stack; lhs is `local[idx]` | using `XLG` for `expr > local` (use `GET` + compare) |
+| `XOP` | rhs on stack; `local[idx] op=` | expecting two stack children |
+| `byte` / `BYTE` | **buf, idx** | `(idx, buf)` or reversed triple like `len, ost, buf` |
+| `buf_cut` / `CUT` | **buf, start, len** | writing `len, start, buf` (legacy comment trap) |
+| `GGET` / `SLOAD` / … | key in place → value **replaces** key slot | expecting a new stack push |
+
+Fitsh source normally emits correct shapes for literals, `param`, and slot `+=`; low-level opcodes matter most for **`bytecode` blocks** and **`local_x_put` / `local_x` IR calls**.
+
 ---
 
 ## 8. Variables and Local Stack Slots

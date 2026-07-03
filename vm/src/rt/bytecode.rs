@@ -1,4 +1,9 @@
 /* Bytecode define Add one bytecode */
+//
+// Multi-operand stack notation (when listed as `a,b,c+`):
+//   left-to-right = stack bottom-to-top = handwritten IR child order (subx, suby, subz, ...).
+//   `+` marks instructions that leave one combined result (often in-place on the bottom slot).
+// See `vm/doc/operand-stack.md` for PACK*, XLG/XOP, PUTX/GETX, and in-place peek ops.
 
 #[repr(u8)]
 #[allow(non_camel_case_types)]
@@ -79,14 +84,14 @@ pub enum Bytecode {
     REV = 0x47,    // a...b  reverse u8
     CAT = 0x48,    // a,b+   buf: a + b
     JOIN = 0x49,   // a...bn+
-    BYTE = 0x4a,   // idx,buf+ pop idx; peek buf -> u8 at idx
-    CUT = 0x4b,    // len,ost,buf+ pop len,ost; cut buf[ost..ost+len]
+    BYTE = 0x4a,   // buf,idx+ pop idx; peek buf -> u8 at idx
+    CUT = 0x4b,    // buf,ost,len+ pop len,ost; peek buf -> buf[ost..ost+len]
     LEFT = 0x4c,   // *&     cut left  buf *
     RIGHT = 0x4d,  // *&     cut right buf *
     LDROP = 0x4e,  // *&     drop buf left *
     RDROP = 0x4f,  // *&     drop buf right *
     SIZE = 0x50,   // &      size (u16)
-    CHOOSE = 0x51, // cond,yes,no+ cond?yes:no (stack bottom->top; matches IR child order subx=cond, suby=yes, subz=no)
+    CHOOSE = 0x51, // cond,yes,no+ cond?yes:no (stack bottom->top; +movement gas 2)
     ____________52 = 0x52,
     ____________53 = 0x53,
     ____________54 = 0x54,
@@ -103,8 +108,8 @@ pub enum Bytecode {
     ____________5f = 0x5f,
     NEWLIST = 0x60,    // + new compo list
     NEWMAP = 0x61,     // + new compo map
-    PACKLIST = 0x62,   // (v...,n)+ pack compo list
-    PACKMAP = 0x63,    // (v...,n)+ pack compo map
+    PACKLIST = 0x62,   // (v...,n)+ items then count on top; not (n,v...)
+    PACKMAP = 0x63,    // (k,v...,n)+ kv pairs then count on top; count is total items
     INSERT = 0x64,     // t,k,v+  compo insert
     REMOVE = 0x65,     // t,k+    compo remove
     CLEAR = 0x66,      // t+      compo clear
@@ -116,22 +121,22 @@ pub enum Bytecode {
     VALUES = 0x6c,     // &       compo values
     TAKEFIRST = 0x6d,  // t+      compo take first; discard rest
     TAKELAST = 0x6e,   // t+      compo take last; discard rest
-    APPEND = 0x6f,     // &       compo append
+    APPEND = 0x6f,     // t,v+    append v to list compo t (t on bottom)
     CLONE = 0x70,      // a++     compo clone
-    UNPACK = 0x71,     // a       unpack sequence to local
-    PACKTUPLE = 0x72,  // (v...,n)+ pack tuple value
+    UNPACK = 0x71,     // c,i+    pop start idx; peek container; item/4 read + local writes
+    PACKTUPLE = 0x72,  // (v...,n)+ tuple items then count on top
     TUPLE2LIST = 0x73, // &       tuple to list
     ____________74 = 0x74,
     ____________75 = 0x75,
     ____________76 = 0x76,
     ____________77 = 0x77,
     ____________78 = 0x78,
-    XLG = 0x79,   // *&    local logic
-    XOP = 0x7a,   // *a    local operand
-    GET = 0x7b,   // *+    local get
-    PUT = 0x7c,   // *a,b  local put
-    GETX = 0x7d,  // &     local x get
-    PUTX = 0x7e,  // v,i   local x put
+    XLG = 0x79,   // *&    local[idx] op stack_top (rhs only on stack; not GT)
+    XOP = 0x7a,   // *a    local[idx] op= stack_top (rhs); +stack_write on result val_size
+    GET = 0x7b,   // *+    local get (idx in immediate)
+    PUT = 0x7c,   // *a    local put (idx in immediate; value on stack)
+    GETX = 0x7d,  // idx+  peek idx -> load local[idx] in place
+    PUTX = 0x7e,  // idx,val+ dynamic local put (IR: local_x_put(idx, val))
     ALLOC = 0x7f, // *     local allocQ
     GET0 = 0x80,  // +     local get idx 0
     GET1 = 0x81,  // +     local get idx 1

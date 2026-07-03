@@ -414,6 +414,8 @@ For **`NTFUNC`**, every current native requires at least one source argument; th
 
 **Why metadata differs from native `argv_len`**: `argv_len` describes source-level arity; opcode `input` describes the uniform stack contract for the whole opcode family. Zero-arg `NTCTL` natives bridge the two via the `nil` sentinel, matching the Invoke zero-arg convention in §11.1.
 
+**Operand stack on other opcodes** (`PACK*`, `PUTX`, `XLG`, in-place storage gets, etc.): see `operand-stack.md`. Operand letters in `bytecode.rs` are **bottom → top**, matching IR `subx`, `suby`, …
+
 ## 12. Source-Language Manual
 
 Canonical source form for `Invoke` is:
