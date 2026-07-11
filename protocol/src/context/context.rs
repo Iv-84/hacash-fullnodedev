@@ -170,7 +170,15 @@ impl<'a> ContextInst<'a> {
             );
         }
         adr.must_privakey()?;
-        let isok = verify_target_signature(adr, self.txr);
+        let isok = if self.env.chain.fast_sync && self.txr.ty() == TransactionType3::TYPE {
+            match self.txr.declared_signer_contains(adr)? {
+                Some(true) => Ok(true),
+                Some(false) => errf!("{} signature verification failed", adr),
+                None => errf!("Type3 declared_signer_contains returned None"),
+            }
+        } else {
+            verify_target_signature(adr, self.txr)
+        };
         self.check_sign_cache.insert(*adr, isok.clone());
         isok.map(|_| ())
     }
